@@ -1,0 +1,16 @@
+{
+  "core": null,
+  "plugins": [
+    "https://downloads.wordpress.org/plugin/woocommerce.zip",
+    "https://downloads.wordpress.org/plugin/woocommerce-gateway-stripe.zip",
+    "./woo-stripe-reconcile"
+  ],
+  "config": {
+    "WP_DEBUG": true,
+    "WP_DEBUG_LOG": true,
+    "WP_DEBUG_DISPLAY": false
+  },
+  "lifecycleScripts": {
+    "afterStart": "bash ./bin/wp-env-setup.sh"
+  }
+}

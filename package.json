@@ -1,0 +1,16 @@
+{
+  "name": "woo-stripe-reconcile-dev",
+  "private": true,
+  "description": "Local Docker dev/test environment for the woo-stripe-reconcile plugin. Not the plugin itself — that's in ./woo-stripe-reconcile.",
+  "scripts": {
+    "env:start": "wp-env start",
+    "env:stop": "wp-env stop",
+    "env:destroy": "wp-env destroy",
+    "env:logs": "wp-env logs",
+    "env:cli": "wp-env run cli --",
+    "env:setup": "bash ./bin/wp-env-setup.sh"
+  },
+  "devDependencies": {
+    "@wordpress/env": "^10.0.0"
+  }
+}
