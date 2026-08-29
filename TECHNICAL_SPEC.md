@@ -1,180 +1,164 @@
 # MVP Technical Spec
 
-Scope: the v1 minimum set from [FEATURES.md](./FEATURES.md). See [PROBLEM.md](./PROBLEM.md) for the underlying problem statement, revised positioning, and evidence.
+Scope: the v1 minimum set from [FEATURES.md](./FEATURES.md). See [PROBLEM.md](./PROBLEM.md) for the problem statement and the corrected dispute/review-handling principle.
 
-> Revised 2026-08-29 (first pass) after an independent technical review found a meta-key bug, a double-email-sending fix action, two false-positive detection rules, and a scaling problem in the original per-order-polling design — all corrected below. **Revised again 2026-08-29 (second pass)** after a follow-up review found that the first-pass bulk list-and-diff redesign, while directionally correct, didn't survive contact with two real flows: the Checkout Session path (which is the actual root cause of this project's flagship evidence issue) writes no order-identifying metadata onto the PaymentIntent at all, and the list endpoint returns charge data as bare IDs unless explicitly expanded. Both passes' corrections are kept inline, since the reasoning matters as much as the fix.
+> Revised 2026-08-29, three times. This revision (third pass) fixes: an idempotency mechanism that cannot be built on MySQL, a full Checkout Session list scan replaced with a targeted per-charge lookup, a two-cadence scheduler cut to one daily pass to remove a race condition, a lock-check call that was still a PHP fatal, two drift types wired into the dashboard with no defined fix behavior, and a fix action that could re-enter its own auto-resolve listener and misattribute authorship in the audit log. Per the third review's own recommendation, this is meant to be the last full rewrite before code — remaining verification is a narrow "trace one row end-to-end" exercise (see the end of this document), not another independent review pass.
 
-## The central design correction: bulk list-and-diff, not per-order polling (first pass) — refined with a Checkout Session cross-reference (second pass)
+## The central mechanism: a single daily bulk list-and-diff, with a targeted lookup for the unresolved tail
 
-The original draft's "Pass 2" queried local orders by `_transaction_id` (which stores a charge ID, not a PaymentIntent ID, and is circularly only set by the webhook that already failed) and called `PaymentIntent::retrieve()` per order — wrong on two counts and didn't scale (10⁴-10⁵ calls/day on a mid-size store, every hour, forever, since the candidate set never shrinks).
+Per-order polling (checking one local order against Stripe at a time) doesn't scale and uses the wrong meta key to begin with (see prior revisions for why). The corrected mechanism, refined twice more since:
 
-**First-pass correction:** invert it — pull a bulk, paginated list of Stripe's own PaymentIntents and diff against local orders, rather than looking up Stripe once per local order.
+1. **List PaymentIntents** created in the last 30 days, paginated, expanding `data.latest_charge` (charge fields come back as bare ID strings otherwise) **and, within the same expand depth budget, `data.latest_charge.dispute` and `data.latest_charge.review`** — needed for the live dispute/review-status checks in FEATURES.md #6/#7, not just capture/refund state.
+2. **Batch-load in-window local orders into an in-memory map up front**, keyed by every identifier a PaymentIntent might resolve through: order key, signature-derived order ID, checkout session ID, **and `_stripe_intent_id`** (the fourth key was missing from an earlier revision's batch-load despite being used in the resolution chain — fixed here). Never look up orders one at a time per PaymentIntent.
+3. **Resolve each PaymentIntent to a local order**, in order: `metadata.signature` (parse leading order ID — see the corrected hash format below, needed only if independently re-deriving/verifying the signature, not for the join itself, which just needs the leading segment) → `metadata.order_key` → in-memory map by `_stripe_intent_id` → **targeted Checkout Session lookup** (below) for the tail that resolves via none of the above.
+4. **Checkout Session lookup, corrected to be targeted, not a full list scan.** The gateway backfills order-identifying metadata onto Adaptive-Pricing-flow PaymentIntents itself, ~2 minutes after a successful session (via its own deferred job) — so most of these resolve via step 3 like any other PaymentIntent once they're at least a few minutes old. **Only PaymentIntents older than that backfill window that still fail every metadata join need a session lookup at all.** For those: `GET /v1/checkout/sessions?payment_intent={id}` (Stripe's list endpoint supports filtering directly by PaymentIntent ID), then cross-reference the returned session ID against local `_stripe_checkout_session_id` order meta. This replaces a full-window Checkout Session list (O(every cart, healthy or not) — the larger of the two calls by a wide margin on any real store) with a lookup sized to the actual unresolved drift population.
+5. **Site scoping** for anything still unresolved: `metadata.site_url`, compared by **normalized host** (www/non-www, http/https), not strict string equality — a strict-equality check would silently drop legitimate payments across any past domain change. A mismatch means the charge belongs to another store/app sharing the Stripe account (skip). A match, or metadata absent entirely, becomes `needs_review`.
+6. **Run the state-comparison checks** (stuck-pending, wrongly-cancelled-paid, with their corrected exclusion lists including the live dispute/review handling) on everything resolved to a local order in step 3.
 
-**Second-pass refinement, because the first-pass version still had a hole:** a bulk PaymentIntent list alone cannot resolve every order, because **one entire class of checkout flow puts no order-identifying data on the PaymentIntent at all.**
+## Cadence — corrected to a single daily pass
 
-### The Checkout Session gap (found in the second review, not present in the first-pass correction)
+The prior revision specified an hourly incremental pass (by `created` high-water mark) plus a daily full resweep, reasoning that the incremental pass alone would miss state changes (a dispute opening, a refund posting) on PaymentIntents outside its creation-time window. That reasoning was right, but running both concurrently, with nothing arbitrating them, meant they could race and double-process the same objects. **Corrected: v1 ships one daily ActionScheduler recurring job, running the full 30-day window every time.** This is simpler, removes the race entirely, and is an acceptable v1 latency for a bug affecting ~0.4-0.5% of orders (see PROBLEM.md) — an hourly pass is a plausible v1.1 addition once real usage data justifies the added complexity. A "run in progress" guard (an ActionScheduler check plus a short-lived transient claim) still prevents the daily job from overlapping a manually-triggered "Run now" click.
 
-The Adaptive Pricing / Optimized Checkout Session flow — confirmed to be the actual root cause of the original #5691 report (see PROBLEM.md) — creates a PaymentIntent whose metadata is limited to `site_url`, `payment_type`, and `checkout_type`. **No `order_id`, `order_key`, or `signature`** — because the session is built from the cart before a WooCommerce order exists yet. A PaymentIntent list-and-diff that expects order-identifying metadata on every PaymentIntent will misidentify every one of these as an orphaned charge — a false positive on the very flow this project's headline evidence is about.
+## Pass B — unchanged in role, given an explicit place in the schedule
 
-**Correction:** Pass A runs two list calls, not one, and cross-references them:
-1. List **PaymentIntents** created in the window (as before).
-2. List **Checkout Sessions** created in the same window (`GET /v1/checkout/sessions`, expanding the linked PaymentIntent reference) — this is the only place a session-flow payment's link back to a purchase context can be found at all, since the relationship only runs Session → PaymentIntent, never the other way.
-3. Build a local map of `checkout_session_id → local_order_id` from orders carrying `_stripe_checkout_session_id` meta, and cross-reference: for a PaymentIntent with no resolvable order-identifying metadata, check whether it appears as the linked intent on a Checkout Session whose ID matches a local order's stored session ID.
+`delivery_success=false` Events poll, diagnostic only, feeding the webhook health-check. **Runs alongside Pass A in the same single daily job**, not on its own separate schedule — there's no reason for it to run more or less often than the reconciliation pass it supports.
 
-This adds one more scope requirement (`Checkout Sessions:Read`, see below) but is the only way to avoid false-orphaning an entire real, evidenced flow.
+## The webhook health-check (FEATURES.md #11) — given an explicit owner and place, which it was missing
 
-### Coverage gaps to design around
-
-- **Subscription objects themselves don't get `_stripe_intent_id`** — `save_intent_to_order()` returns early only when `is_subscription()` is true, and that's specifically true for a `WC_Subscription` object, not for a subscription's parent order or its renewal orders. **Correction (second review):** the first-pass draft overstated this as "blind to every subscription order" — parent and renewal orders (the actual payable orders a merchant cares about reconciling) do get the meta normally. The real gap is narrower: the subscription record itself isn't a payable order this reconciler should be diffing in the first place, so this isn't a coverage gap that needs a workaround.
-- **Checkout Session flow** uses `_stripe_checkout_session_id`, a separate ID space — handled via the cross-reference above, not by reading `_stripe_intent_id` harder.
-- Legacy (pre-UPE) source-based orders and some `order-pay`-endpoint orders may have neither field populated — treat as `needs_review`, not silently skipped or immediately flagged.
-
-## Two detection passes, with corrected cadence
-
-1. **Pass A — bulk list-and-diff (PaymentIntents + Checkout Sessions cross-reference).** The primary mechanism. Handles the narrowed wrongly-cancelled-paid check, the stuck-pending check (with its full exclusion list — see FEATURES.md #7, including the `charge.disputed` exclusion added in the second review), and orphaned-charge detection.
-   **Corrected cadence (second review) — the first-pass draft's single "re-pull the 30-day window every run" design would re-fetch the same month's data 24×/day forever, and never catch a state change on an object outside the newly-created window.** Two cadences instead:
-   - **Incremental** (hourly default): fetch objects created since the last incremental run's high-water mark. Cheap, catches new checkout activity promptly.
-   - **Full resweep** (daily default): re-pull the full reconciliation window. Needed because a dispute opening, a refund posting, or a cancellation happening *after* a PaymentIntent's creation timestamp would never surface via the incremental pass alone, since it filters on `created`, not `updated`.
-2. **Pass B — `delivery_success=false` Events poll.** Diagnostic only — feeds the webhook health-check (FEATURES.md #11), not orphan detection (a webhook the gateway couldn't map to an order still gets acked 200, so this filter returns nothing for that case).
+`GET /v1/webhook_endpoints`, comparing the configured endpoint URL against the site's current production URL. **Runs as its own step within the same single daily job**, not folded into Pass B (a prior revision's "webhook health comes from Pass B" was a mislabel — Pass B is the `delivery_success=false` diagnostic, a different signal). This check directly catches the stale-staging-domain root cause that's this project's own best piece of evidence (see PROBLEM.md) — worth building early, not treating as an afterthought.
 
 ## Plugin identity
 
-- Slug: `woo-stripe-reconcile` (placeholder name)
-- Hard dependency: WooCommerce active AND `woocommerce-gateway-stripe` active — check on activation, self-deactivate with an admin notice if either is missing.
-- Declare HPOS compatibility explicitly (`FeaturesUtil::declare_compatibility('custom_order_tables', __FILE__, true)`). Query orders via `wc_get_orders()`/`WC_Order_Query` and core lookup helpers (e.g. `wc_get_order_id_by_order_key()`) — no direct `$wpdb` queries against order or meta tables. **Correction (second review):** the first-pass draft cited the gateway plugin as an example of violating this ("HPOS-fatal"); on inspection its raw-query path only runs on legacy (non-HPOS) storage as an intentional branch — it isn't broken. The recommendation to avoid raw queries in our own code stands regardless, just not on that basis.
-- **Version baseline, clarified (second review):** WooCommerce core (`trunk`) requires WordPress 7.0; the gateway plugin itself requires WordPress 6.8 and PHP 7.4. Since the target population is gateway-plugin users specifically (not necessarily running the very latest WooCommerce core), adopt the **gateway's own baseline — WP 6.8, PHP 7.4** — as this plugin's `Requires at least`, rather than WooCommerce core's stricter number.
+- Slug: `woo-stripe-reconcile` (placeholder). Hard dependency on WooCommerce + gateway plugin active. HPOS compatibility declared via `FeaturesUtil::declare_compatibility`. Baseline: WordPress 6.8, PHP 7.4 (the gateway's own requirement, since the target population is gateway users specifically).
+- Query orders via `wc_get_orders()`/`WC_Order_Query`/core lookup helpers only, never raw `$wpdb` — this recommendation stands on its own merits (a prior revision incorrectly cited the gateway plugin itself as violating this; on inspection its raw-query path is an intentional, correct legacy-storage branch, not a bug to avoid copying for that reason).
 
 ## Data model
 
-Two custom tables (created via `dbDelta` on activation):
-
-**`{prefix}wsr_event_ledger`** — dedup ledger. **Scope corrected (second review):** covers the hook listeners and Pass B only — PaymentIntents (Pass A's subject) carry no event ID for this table to key on. See the drift-log uniqueness constraint below for Pass A's idempotency mechanism instead.
+**`{prefix}wsr_event_ledger`** — dedup ledger for the hook listeners and Pass B only (PaymentIntents have no event ID for this to key on).
 | column | notes |
 |---|---|
 | event_id | Stripe event ID, unique key |
 | status | `pending` / `processing` / `processed` |
-| created_at, processed_at | |
+| created_at, processed_at | pruned to Stripe's 30-day retention |
 
-Pruned on each scheduled run to Stripe's 30-day Events retention window.
-
-**`{prefix}wsr_drift_log`** — drift record and fix audit log combined.
+**`{prefix}wsr_drift_log`** — corrected to be buildable on MySQL and to support dismissal persistence and escalation, neither of which the prior schema actually supported.
 | column | notes |
 |---|---|
 | id | |
-| order_id | local WC order ID (nullable — an unresolved `needs_review` orphan candidate may have no order to attach to yet) |
+| order_id | nullable — `orphaned_charge`/`needs_review` rows have none |
 | stripe_object_id | PaymentIntent ID or Checkout Session ID |
 | drift_type | `stuck_pending` / `wrongly_cancelled_paid` / `orphaned_charge` / `needs_review` (v1); `duplicate_order` / `refund_mismatch` reserved for v1.1 |
-| severity | `high` / `critical` |
+| severity | `info` / `high` / `critical` — **`info` added this revision**, for currently-disputed or currently-under-review matches (detected, not auto-fixable) |
 | local_status_at_detection, stripe_status_at_detection | |
-| status | `open` / `fixed` / `dismissed` |
-| detected_at, resolved_at, resolved_by | `resolved_by` = `system` (self-healed) or a WP user ID (manual fix) |
-| details | JSON blob: amounts, currency, raw PI status, dispute flag, any extra context |
+| status | `open` / `dismissed` / `fixed` |
+| **open_key** | **new, this revision.** Generated: `CONCAT(stripe_object_id, ':', drift_type)` when `status` is `open` or `dismissed`, `NULL` when `fixed`. Carries a plain `UNIQUE KEY`. *Why this exists:* the prior revision specified a `WHERE status = 'open'` partial unique index — **MySQL/MariaDB don't support partial/filtered unique indexes at all**, so that constraint was unbuildable on the platform this plugin actually runs on. A generated column plus a plain unique index (which MySQL correctly treats as satisfied by any number of `NULL`s) reproduces the intended semantics and is real, portable SQL. It also fixes a second gap the prior schema had: a `dismissed` row's uniqueness previously lapsed the moment status changed, so the next scan would silently re-insert a drift the admin had already dismissed — including `dismissed` alongside `open` in the generated key means a dismissal actually persists. |
+| **first_detected_at** | **new, this revision** — needed because the "update `detected_at` on re-detection" behavior meant the original detection time was being overwritten, leaving no way to answer "how long has this been open" or drive escalation. |
+| detected_at | now specifically "last seen," not "first seen" |
+| **detection_count** | **new, this revision** — incremented on each re-detection of an already-open row. Drives `needs_review → orphaned_charge` escalation at `detection_count >= 2`, which — with the single daily cadence above — cleanly means "still unresolved the next day." **Escalation mutates the existing row's `drift_type` in place** (`UPDATE ... SET drift_type = 'orphaned_charge'`, letting the generated `open_key` recompute) — it never inserts a second row for the same object. Confirmed via the end-to-end trace below: inserting a new row here would let the same charge appear twice on the dashboard under two different categories simultaneously. |
+| resolved_at, resolved_by | `system` (self-healed, correctly attributed — see the fixer's re-entrancy guard below) or a WP user ID |
+| details | JSON: amounts, currency, raw PI status, dispute/review status snapshot, any extra context |
 
-**Added, second review:** a **unique constraint on `(stripe_object_id, drift_type)` where `status = 'open'`** — this is Pass A's idempotency mechanism, since it has no event-ID ledger to rely on. A re-detected open drift updates `detected_at` on the existing row rather than inserting a duplicate.
-
-A `schema_version` option, checked on plugin load, with a migration path for future changes to these two tables.
+A `schema_version` option with a migration path for future changes to these tables.
 
 ## File structure
 
 ```
 woo-stripe-reconcile/
-  woo-stripe-reconcile.php          # bootstrap: header, activation/deactivation hooks, dependency check
+  woo-stripe-reconcile.php
   includes/
-    class-wsr-activator.php         # dbDelta table creation + schema-version migration, default options
-    class-wsr-stripe-client.php     # thin read-only wrapper — raw wp_remote_get(), no bundled SDK (see below)
-    class-wsr-event-ledger.php      # dedup ledger (hooks + Pass B only) + retention pruning
-    class-wsr-hook-listener.php     # wc_gateway_stripe_process_webhook_payment_error (filtered: exclude dispute type),
-                                     # wc_gateway_stripe_process_payment_charge (detection accelerator only),
-                                     # wc_stripe_paid_order_cancellation_prevented (telemetry),
-                                     # woocommerce_payment_complete (auto-resolve open drift — see Fix actions)
-    class-wsr-reconciler.php        # Pass A (incremental + daily resweep, PaymentIntent+CheckoutSession cross-reference)
-                                     # + Pass B (undelivered-events diagnostic)
-    class-wsr-scheduler.php         # ActionScheduler recurring registration (two cadences) + dispatch
-    class-wsr-fixer.php             # payment_complete() + lock-check (read-only accessor) + Stripe-meta completion
-                                     # + post-call state re-verification before marking fixed
-    class-wsr-audit-log.php         # wraps drift_log's resolved/status fields; implements WP Privacy export/erase hooks
-    class-wsr-admin-dashboard.php   # WP_List_Table-based drift screen (categories matching what v1 actually produces),
-                                     # webhook health status
-    class-wsr-settings.php          # API key entry/validation (4 scopes, see below), environment badge, coverage indicator
-  assets/                           # admin CSS/JS for the dashboard
+    class-wsr-activator.php         # dbDelta (incl. generated open_key column + unique index), schema versioning
+    class-wsr-stripe-client.php     # raw wp_remote_get() wrapper, no bundled SDK
+    class-wsr-event-ledger.php      # hooks + Pass B dedup only, retention pruning
+    class-wsr-hook-listener.php     # wc_gateway_stripe_process_webhook_payment_error (dispute-filtered),
+                                     # wc_gateway_stripe_process_payment_charge (accelerator only),
+                                     # wc_stripe_paid_order_cancellation_prevented (telemetry only),
+                                     # woocommerce_payment_complete (auto-resolve — re-entrancy-guard-aware)
+    class-wsr-reconciler.php        # Pass A (single daily, PI list + targeted session lookup for unresolved tail)
+                                     # + Pass B (undelivered-events diagnostic) + webhook health-check, all in one job
+    class-wsr-scheduler.php         # ActionScheduler: ONE daily recurring registration + "run in progress" guard
+    class-wsr-fixer.php             # payment_complete() + read-only lock check + Stripe-meta completion via
+                                     # WC_Stripe_Order_Helper instance setters + post-call re-verification +
+                                     # re-entrancy guard around the auto-resolve listener
+    class-wsr-audit-log.php         # drift_log wrapper; WP Privacy export/erase hooks
+    class-wsr-admin-dashboard.php   # drift categories matching v1 output; Dismiss-only rows for orphan/needs-review
+    class-wsr-settings.php          # API key entry (6 scopes, see below), environment badge, coverage indicator
+  assets/
 ```
 
 ## Core flow
 
 ### Setup
-1. Activation checks WooCommerce + gateway plugin are active.
-2. `dbDelta` creates the two tables (with the uniqueness constraint on `wsr_drift_log`); set `schema_version` option.
-3. Settings screen: merchant pastes a **restricted, read-only** Stripe key. **Scope list, corrected and expanded (second review):** `PaymentIntents:Read`, `Charges:Read` (core), `Checkout Sessions:Read` (gates the cross-reference above — missing from the first-pass draft entirely), `Events:Read` (gates Pass B), `Webhook Endpoints:Read` (gates the webhook health-check, FEATURES.md #11 — also missing from the first-pass draft). **Before writing the onboarding copy that tells merchants which toggles to enable, verify against a sandbox restricted key which of these Stripe's permission model actually exposes as discrete scopes** — confirmed for PaymentIntents/Charges, not yet confirmed for the other three.
-4. Support a `WSR_STRIPE_RESTRICTED_KEY` wp-config constant as the secure-storage option, falling back to a `wp_options` entry.
-5. Environment detection: `wp_get_environment_type()` plus a fallback, since it defaults to `'production'` when unset. **Prefix correction (second review):** compare the **restricted**-key prefix (`rk_live_`/`rk_test_`) against the site's environment signal — not `pk_live_`/`pk_test_` (publishable-key prefixes), which was an error in the prior revision of this document.
-6. Run the webhook health check (FEATURES.md #11) on setup and periodically thereafter.
+1-2. Unchanged: activation dependency check; `dbDelta` table creation including the `open_key` generated column and its unique index; `schema_version` set.
+3. Settings screen, restricted key. **Scope list, corrected to six (a prior revision said "four" in one place while listing five elsewhere; this revision adds a sixth):** `PaymentIntents:Read`, `Charges:Read`, `Checkout Sessions:Read`, `Events:Read`, `Webhook Endpoints:Read`, and **`Disputes:Read`** (new this revision — needed for the corrected live dispute-status check). All six confirmed to exist as discrete Stripe restricted-key resources (resolved this pass; a prior revision had flagged three of these as unverified). A 15-minute sandbox-key confirmation is still worth doing before finalizing onboarding copy, but it's no longer a design risk.
+4-6. Unchanged: `WSR_STRIPE_RESTRICTED_KEY` constant or encrypted option; environment detection via `wp_get_environment_type()` plus a restricted-key-prefix (`rk_live_`/`rk_test_` — corrected from an earlier, wrong `pk_`-prefix version) fallback check; run the webhook health-check on setup.
 
-### Real-time signal (accelerator/telemetry, not a resolver)
-- `wc_gateway_stripe_process_webhook_payment_error`, filtered to exclude dispute-created invocations → record a drift candidate, schedule a single ActionScheduler action ~2 minutes out to verify against Stripe directly.
-- `wc_gateway_stripe_process_payment_charge` → **used only to flag a candidate as "likely resolving," never to mark a drift record `fixed` or `resolved`** (corrected, second review — this hook fires before the charge is actually processed/committed, so treating it as confirmation would mark unfixed orders as resolved).
-- `woocommerce_payment_complete` → **the correct auto-resolve trigger** (corrected, second review, replacing the previous draft's use of the process-charge hook for this purpose) — fires only after WooCommerce core has actually committed the payment-complete transition, so a drift record can be safely marked `resolved_by: system` here.
-- `wc_stripe_paid_order_cancellation_prevented` → log as telemetry only (once-per-order, per the gateway's own guard) — valuable for the coverage dashboard, not a resolver for the wrongly-cancelled-paid check (see FEATURES.md #3 for why that framing was wrong in the prior revision).
+### Real-time signal (accelerator/telemetry only, never a resolver)
+- `wc_gateway_stripe_process_webhook_payment_error` (dispute-filtered) → schedule a short-delay verification, don't act instantly.
+- `wc_gateway_stripe_process_payment_charge` → flag as "likely resolving" only; too early in the request lifecycle to trust as confirmation.
+- `wc_stripe_paid_order_cancellation_prevented` → telemetry only, once-per-order.
+- `woocommerce_payment_complete` → the auto-resolve trigger, **now re-entrancy-guard-aware**: if the fixer set its short-lived flag before calling `payment_complete()` itself, this listener skips writing `resolved_by: system`, deferring to the fixer's own authoritative write. Without this guard, every manual admin fix would get double-written and misattributed as a system self-heal, since the fixer's own call to `payment_complete()` fires this exact hook synchronously.
 
-### Scheduled reconciliation (ActionScheduler, two cadences)
+### Scheduled reconciliation — one daily job, three steps
+1. **Pass A**: the bulk list-and-diff mechanism described above (PaymentIntent list → in-memory order map → metadata joins → targeted session lookup for the unresolved tail → site-scoped `needs_review`/orphan classification → state-comparison checks with live dispute/review handling).
+2. **Pass B**: `delivery_success=false` Events poll, diagnostic only.
+3. **Webhook health-check**: `GET /v1/webhook_endpoints` vs. current site URL.
 
-**Pass A — incremental (hourly):**
-List PaymentIntents created since the last incremental high-water mark, paginated, with `expand[]=data.latest_charge` (**added, second review** — without this, the list response returns the charge as a bare ID string, and every check reading `charge.captured`, `charge.outcome.type`, or `charge.disputed` would silently evaluate against undefined data). List Checkout Sessions created in the same window, expanding the linked PaymentIntent. Batch-load in-window local orders into an in-memory map up front (keyed by order key / signature-derived order ID / checkout session ID) — **do not look up orders one at a time per PaymentIntent**, which would reintroduce the original per-order-call scaling problem from the other direction.
+All three run under one "run in progress" guard so a manual "Run now" click and the scheduled trigger can't overlap.
 
-For each PaymentIntent, resolve to a local order via, in order: `metadata.signature` (parse leading order ID) → `metadata.order_key` → Checkout Session cross-reference → in-memory map by `_stripe_intent_id`. If resolved, run the state-comparison checks (stuck-pending, wrongly-cancelled-paid) with their full exclusion lists (see FEATURES.md #6/#7, including the `charge.disputed` hard exclusion). If not resolved: check `metadata.site_url` via **host comparison, not strict string equality** (normalizing www/non-www, http/https) against the site's own host; a mismatch means it belongs to another store/app sharing the Stripe account and is skipped; a match, or metadata absent entirely, is written as `needs_review` and escalated to `orphaned_charge` only if still unresolved on a second consecutive run.
+### Fix action — `payment_complete()` plus four corrected companion steps
 
-**Pass A — full resweep (daily):**
-Same logic, full 30-day window, to catch state changes (a dispute opened, a refund posted, a late cancellation) on PaymentIntents outside the incremental window's `created` filter.
+1. **Lock check, call syntax corrected this revision.** `WC_Stripe_Order_Helper::get_instance()->is_order_payment_locked( $order )` / `->get_order_existing_payment_lock( $order )` — these are **instance methods**, not static ones; the bare static-call form specified in the second revision is a PHP fatal. Skip/defer the fix if locked.
+2. **Stripe-meta completion, write path corrected this revision.** `payment_complete()` doesn't set `_stripe_charge_captured` or clear `_stripe_payment_awaiting_action`. Their backing meta constants are private to the gateway's order-helper class — route through that class's own instance setter/clearer methods (confirm exact method names against the installed gateway version at implementation time; don't hardcode the private constants' literal string values from documentation alone).
+3. **Post-call verification** (unchanged from the second revision): re-read order status/`date_paid` after calling `payment_complete()` before writing `fixed` — its return value alone (`true` on a no-op path too) can't be trusted.
+4. **Re-entrancy guard, new this revision.** Set a short-lived flag immediately before calling `payment_complete()`; the `woocommerce_payment_complete` auto-resolve listener (above) checks and skips while it's set, so the fixer's own write — with the correct `resolved_by` (the admin's user ID, not `system`) — is the one that lands.
 
-**Pass B — undelivered-events diagnostic:**
-Unchanged from the first-pass revision — `delivery_success=false`, feeds the webhook health-check status, not orphan detection.
+Fix-applied tracking via one `_wsr_fix_applied` meta key (JSON list), for idempotency only — `wsr_drift_log` remains the authoritative, queryable history.
 
-### Fix action — corrected primitive, now with three additional API-level fixes
+**No Fix action exists for `orphaned_charge` or `needs_review`** — there's no local order to act on. These are dismissible, informational rows only in v1 (see FEATURES.md).
 
-The fixer calls `$order->payment_complete( $charge_id )` — **not** `update_status()` plus a manual re-fire, which would double-send WooCommerce's own emails (see FEATURES.md for the full first-pass correction). Three further corrections from the second review, all "the right primitive, called incorrectly" in the prior revision:
-
-1. **Lock check, corrected.** `WC_Stripe_Order_Helper::lock_order_payment()` **acquires** a lock (returning whether one was already held) — it does not check one. Calling it as a pre-condition check would silently take a 5-minute lock the fixer never releases, blocking the gateway's own webhook processing. **Use the read-only accessors** (`is_order_payment_locked()` / `get_order_existing_payment_lock()`) to check, and skip/defer the fix if locked.
-2. **Post-call verification, added.** `payment_complete()`'s return value is `true` on a no-op path as well as genuine success — it cannot be used as a success signal on its own. Re-read the order's actual status and `date_paid` after the call, and only write `fixed` to `wsr_drift_log` if the state genuinely changed as expected.
-3. **Stripe-meta completion, added.** `payment_complete()` alone doesn't set `_stripe_charge_captured` or clear `_stripe_payment_awaiting_action` — both of which the gateway's own normal processing path sets, and both of which other gateway logic (refunds, cancellation checks) reads. Leaving them unset would reproduce the exact failure mode described in this project's own cited evidence, [#5699](https://github.com/woocommerce/woocommerce-gateway-stripe/issues/5699). The fixer must also write `_stripe_charge_captured = true`, set `_stripe_intent_id` if absent, and clear `_stripe_payment_awaiting_action`.
-
-Fix-applied tracking uses one `_wsr_fix_applied` meta key (JSON list of already-fixed `stripe_object_id`s) — unbounded per-fix dynamic keys were the problem with the original draft, not queryability (a JSON blob is actually less queryable; `wsr_drift_log` remains the authoritative queryable history regardless).
-
-**Never calls a Stripe write endpoint.** Refund/void/charge actions remain permanently out of scope per the read-only trust model in PROBLEM.md.
+**Never calls a Stripe write endpoint.**
 
 ### Admin dashboard
-`WooCommerce → Stripe Reconciliation`, `WP_List_Table`-based:
-- Columns: Order #, Drift Type, Severity, Detected At, Local status vs Stripe status, Actions (Fix / Dismiss / View in Stripe Dashboard).
-- **Category list corrected (second review):** stuck-pending / wrongly-cancelled-paid / orphaned-charge / needs-review — matching what v1 actually produces. `refund-mismatch` is v1.1 scope and shouldn't appear until that check ships.
-- "Last successful run" / coverage indicator as a **primary dashboard element**, showing both cadences (incremental and full-resweep) separately, since a stalled daily resweep is a different failure than a stalled hourly incremental.
-- Webhook health status (from Pass B) shown alongside.
-- Settings tab: API key, scheduler frequency for both cadences, alert email.
+- Categories matching actual v1 output: stuck-pending / wrongly-cancelled-paid / orphaned-charge / needs-review.
+- `info`-severity rows (currently disputed/under-review matches) shown distinctly, no Fix button.
+- Orphan/needs-review rows: Dismiss only.
+- "Last successful run" as a primary element (one line now, not two cadences to show).
+- Webhook health status, from its own daily check.
 
 ## Stripe integration specifics
 
-No bundled SDK — confirmed against the reference implementation itself, which uses raw `wp_remote_post()`/`wp_remote_get()`, not `stripe-php` (avoids the global-PHP-namespace collision risk of two plugins bundling different SDK versions). All v1 calls are read-only:
-- `GET /v1/payment_intents` (list, paginated, `expand[]=data.latest_charge`) — **no server-side status or metadata filter exists on this endpoint** (confirmed against Stripe's API reference), so all filtering happens locally after fetch.
-- `GET /v1/checkout/sessions` (list, paginated, expanding the linked PaymentIntent) — new in this revision, for the Checkout Session cross-reference.
-- `GET /v1/events` (Pass B diagnostic, `delivery_success=false`).
-- `GET /v1/webhook_endpoints` (webhook health-check, FEATURES.md #11).
+No bundled SDK — raw `wp_remote_get()`, matching the reference implementation. Calls needed for v1:
+- `GET /v1/payment_intents` (list, paginated, `expand[]=data.latest_charge`, `expand[]=data.latest_charge.dispute`, `expand[]=data.latest_charge.review`) — no server-side status/metadata filter exists; all filtering happens locally.
+- `GET /v1/checkout/sessions?payment_intent={id}` (targeted, only for the unresolved tail — not a full list).
+- `GET /v1/events` (Pass B diagnostic).
+- `GET /v1/webhook_endpoints` (health-check).
 
-Restricted key scopes needed for v1 (expanded, second review): `PaymentIntents:Read`, `Charges:Read`, `Checkout Sessions:Read`, `Events:Read`, `Webhook Endpoints:Read`. Verify all five against a sandbox key before finalizing onboarding copy (see Setup step 3 above).
-
-No endpoint exists to force webhook redelivery — the fixer always acts on a direct list/read, never waits on redelivery.
+Restricted key scopes: `PaymentIntents:Read`, `Charges:Read`, `Checkout Sessions:Read`, `Events:Read`, `Webhook Endpoints:Read`, `Disputes:Read` — six, confirmed to exist.
 
 ## Compliance & standards
 
-Unchanged from the second revision — both review passes confirmed the PCI, Stripe-terms, WordPress.org, and GDPR sections as accurate on inspection. No further corrections this pass.
+Unchanged across all three review passes — confirmed accurate each time. No further corrections.
 
-## Explicitly deferred (per FEATURES.md, not re-litigated here)
+## Explicitly deferred (v1.1+)
 
-Duplicate-order flagging, refund/capture drift check, idempotency-collision flag, dispute-cascade detection, Radar annotations, Slack alerting, any multi-site/hosted variant, full Stripe Connect/multi-currency amount comparison (order *matching* for Checkout Session flows is in v1 per the correction above — only the amount-comparison logic is deferred for currency-mismatched orders specifically).
+Duplicate-order flagging, refund/capture drift check, idempotency-collision flag, dispute-cascade detection, Radar annotations (beyond the live-status check already in v1), Slack alerting, any multi-site/hosted variant, full Connect/multi-currency amount comparison, hourly incremental scheduling, a manual "link charge to order" action for orphan/needs-review rows.
 
 ## Suggested build order
 
-1. Plugin skeleton, activation hook, table creation (with the drift-log uniqueness constraint) + schema versioning, WooCommerce/gateway dependency check.
-2. Stripe HTTP client wrapper (`wp_remote_get()`-based, no SDK) + settings page. **Sandbox-verify all five restricted-key scopes** (not just one) before finalizing onboarding copy.
-3. **Pass A, built as the full corrected design from the start** — bulk list-and-diff with `expand[]=data.latest_charge`, the Checkout Session cross-reference, host-normalized site scoping, and the full exclusion lists (including `charge.disputed`) — as a manual "Run now" button, testable without scheduler/hook wiring. This is now a materially bigger first milestone than the original draft's per-order loop would have been, but it's the version that actually survives contact with a real store; building the simpler wrong version first would mean rewriting the core matching logic, not just wrapping it in a scheduler later.
-4. Wrap step 3 in the two ActionScheduler cadences (incremental hourly, full resweep daily); add Pass B.
-5. Hook listeners, with their corrected roles (accelerator/telemetry, not resolvers) — `woocommerce_payment_complete` specifically for auto-resolution.
-6. Admin dashboard UI, with the coverage indicator (both cadences) and webhook health status as primary elements from the start.
-7. Fix action — `payment_complete()` plus the three corrected companion steps (lock-check via read-only accessor, post-call re-verification, Stripe-meta completion) — plus audit log.
+1. Plugin skeleton, activation (tables incl. `open_key` + unique index, schema versioning), dependency check.
+2. Stripe HTTP client wrapper, settings page, sandbox-verify all six scopes.
+3. **Pass A**, built as the corrected design directly: bulk list with the three expands, in-memory order map keyed by all four identifiers, the three-step join chain, targeted (not full-list) session lookup for the unresolved tail, host-normalized site scoping, live dispute/review-aware state checks — as a manual "Run now" button, testable without scheduler wiring.
+4. Wrap step 3 in the single daily ActionScheduler job; add Pass B and the webhook health-check as the other two steps in that same job.
+5. Hook listeners in their corrected accelerator/telemetry/re-entrancy-aware-resolver roles.
+6. Admin dashboard: correct categories, `info` severity, Dismiss-only rows for orphan/needs-review, coverage indicator.
+7. Fix action: `payment_complete()` plus all four corrected companion steps, audit log.
 8. Email alerting.
+
+## Before writing code: a narrow verification exercise, not a fourth review pass
+
+The third review's own recommendation, followed here rather than deferred: for each of the four drift types, trace one row end-to-end through **detect → dedup/escalate → display → fix-or-not → audit**.
+
+- **`stuck_pending` / `wrongly_cancelled_paid`:** Pass A resolves the order, checks status + exclusions (live dispute/review status included) → inserts or updates via `open_key`, `detection_count` incremented on repeat detection → dashboard shows it at `high`/`critical` severity, or `info` with no Fix button if a dispute/review is currently open → admin clicks Fix → lock check (read-only accessor) → `payment_complete()` + meta completion, re-entrancy flag set → listener skips auto-resolve → post-call verification → `wsr_drift_log` updated to `fixed`, `resolved_by` = the admin's user ID. Every stage has defined behavior. Holds together.
+- **`orphaned_charge` / `needs_review`:** Pass A fails to resolve an order, site-scope check passes → inserted as `needs_review` → re-detected next day, `detection_count` reaches 2 → **existing row's `drift_type` mutated to `orphaned_charge` in place** (see the data model table above — this was the one genuine ambiguity this trace surfaced; resolved by mutating in place, not inserting a second row, so the same charge never appears twice) → dashboard shows it, Dismiss-only, no Fix button → admin dismisses → `status = 'dismissed'`, `open_key` still populated (dismissed rows stay in the unique-key set) → next day's run re-detects the same charge, hits the `open_key` collision, sees the existing row is `dismissed`, and skips the update — the dismissal persists rather than silently reappearing. Holds together once the mutate-in-place rule above is explicit, which it now is.
+
+This is the ~30-minute desk-check the third review recommended in place of a fourth independent pass — it surfaced one real ambiguity (mutate vs. insert on escalation), now resolved above. No further review pass is planned before implementation begins.
