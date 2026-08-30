@@ -4,7 +4,7 @@
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/9.6/phpunit.xsd">
     <testsuites>
-        <testsuite name="woo-stripe-reconcile">
+        <testsuite name="stripe-order-reconciler">
             <directory suffix="Test.php">./tests</directory>
         </testsuite>
     </testsuites>

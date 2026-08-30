@@ -1,4 +1,4 @@
-# WooCommerce Stripe Reconcile
+# Stripe Order Reconciler for WooCommerce
 
 A self-hosted WordPress plugin that reconciles Stripe payment state against WooCommerce order state — for stores using the third-party **WooCommerce Stripe Payment Gateway** plugin (not WooPayments).
 
@@ -42,9 +42,9 @@ If a restricted key with write access to anything ever seems necessary, that's a
 
 This isn't published on WordPress.org (it's a private project) — install it manually:
 
-1. Copy (or clone) the `woo-stripe-reconcile/` directory into your site's `wp-content/plugins/`.
+1. Copy (or clone) the `stripe-order-reconciler/` directory into your site's `wp-content/plugins/`.
 2. Activate WooCommerce and the WooCommerce Stripe Payment Gateway first — the plugin refuses to activate (and deactivates itself if either is later turned off) without both.
-3. Activate **WooCommerce Stripe Reconcile**.
+3. Activate **Stripe Order Reconciler for WooCommerce**.
 
 ## Setup
 
@@ -112,7 +112,7 @@ npm run env:cli -- <command>   # run any wp-cli command against the dev site
 ### Running the test suite
 
 ```bash
-npx wp-env run tests-cli -- bash -c "cd wp-content/plugins/woo-stripe-reconcile && vendor/bin/phpunit"
+npx wp-env run tests-cli -- bash -c "cd wp-content/plugins/stripe-order-reconciler && vendor/bin/phpunit"
 ```
 
 145 tests across detection logic, the fixer's live-recheck flow, the scheduler's lock, encryption, and every documented bug fix from the independent review round. `tests/TestCase.php` has the shared fixtures (`make_order()`, `base_pi()`, etc.) if you're adding more.
@@ -121,4 +121,4 @@ A pre-PHPUnit, plain eval-file smoke test also still exists at `dev-tests/manual
 
 ## License
 
-GPLv2 or later — see [`woo-stripe-reconcile/readme.txt`](woo-stripe-reconcile/readme.txt) (the WordPress.org-format plugin readme, used for the in-plugin external-service disclosure and changelog).
+GPLv2 or later — see [`stripe-order-reconciler/readme.txt`](stripe-order-reconciler/readme.txt) (the WordPress.org-format plugin readme, used for the in-plugin external-service disclosure and changelog).

@@ -5,7 +5,7 @@
  * container), load WooCommerce and this plugin on muplugins_loaded (before
  * WP's own bootstrap runs its install routine), then hand off.
  *
- * Run via: wp-env run tests-cli -- bash -c "cd wp-content/plugins/woo-stripe-reconcile && vendor/bin/phpunit"
+ * Run via: wp-env run tests-cli -- bash -c "cd wp-content/plugins/stripe-order-reconciler && vendor/bin/phpunit"
  */
 
 $_tests_dir = getenv( 'WP_TESTS_DIR' );
@@ -41,7 +41,7 @@ function _wsr_manually_load_plugins() {
 
 	require $plugins_dir . '/woocommerce/woocommerce.php';
 	require $plugins_dir . '/woocommerce-gateway-stripe/woocommerce-gateway-stripe.php';
-	require dirname( __DIR__ ) . '/woo-stripe-reconcile.php';
+	require dirname( __DIR__ ) . '/stripe-order-reconciler.php';
 }
 tests_add_filter( 'muplugins_loaded', '_wsr_manually_load_plugins' );
 

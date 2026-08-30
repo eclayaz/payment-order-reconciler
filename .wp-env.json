@@ -3,7 +3,7 @@
   "plugins": [
     "https://downloads.wordpress.org/plugin/woocommerce.zip",
     "https://downloads.wordpress.org/plugin/woocommerce-gateway-stripe.zip",
-    "./woo-stripe-reconcile"
+    "./stripe-order-reconciler"
   ],
   "config": {
     "WP_DEBUG": true,

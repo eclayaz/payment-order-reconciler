@@ -29,7 +29,7 @@ The prior revision specified an hourly incremental pass (by `created` high-water
 
 ## Plugin identity
 
-- Slug: `woo-stripe-reconcile` (placeholder). Hard dependency on WooCommerce + gateway plugin active. HPOS compatibility declared via `FeaturesUtil::declare_compatibility`. Baseline: WordPress 6.8, PHP 7.4 (the gateway's own requirement, since the target population is gateway users specifically).
+- Slug: `stripe-order-reconciler` (final — was `woo-stripe-reconcile` during development; renamed for the WP.org rollout since a plugin name/slug leading with "WooCommerce" is a trademark violation Automattic actively enforces at review time). Public name: **Stripe Order Reconciler for WooCommerce**. Hard dependency on WooCommerce + gateway plugin active. HPOS compatibility declared via `FeaturesUtil::declare_compatibility`. Baseline: WordPress 6.8, PHP 7.4 (the gateway's own requirement, since the target population is gateway users specifically).
 - Query orders via `wc_get_orders()`/`WC_Order_Query`/core lookup helpers only, never raw `$wpdb` — this recommendation stands on its own merits (a prior revision incorrectly cited the gateway plugin itself as violating this; on inspection its raw-query path is an intentional, correct legacy-storage branch, not a bug to avoid copying for that reason).
 
 ## Data model
@@ -63,8 +63,8 @@ A `schema_version` option with a migration path for future changes to these tabl
 ## File structure
 
 ```
-woo-stripe-reconcile/
-  woo-stripe-reconcile.php
+stripe-order-reconciler/
+  stripe-order-reconciler.php
   includes/
     class-wsr-activator.php         # dbDelta (incl. generated open_key column + unique index), schema versioning
     class-wsr-stripe-client.php     # raw wp_remote_get() wrapper, no bundled SDK

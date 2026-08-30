@@ -40,13 +40,13 @@ class WSR_Drift_List_Table extends WP_List_Table {
 		}
 
 		return $columns + array(
-			'order'    => __( 'Order', 'woo-stripe-reconcile' ),
-			'object'   => __( 'Stripe object', 'woo-stripe-reconcile' ),
-			'type'     => __( 'Type', 'woo-stripe-reconcile' ),
-			'severity' => __( 'Severity', 'woo-stripe-reconcile' ),
-			'states'   => __( 'Local → Stripe', 'woo-stripe-reconcile' ),
-			'seen'     => __( 'Detected', 'woo-stripe-reconcile' ),
-			'actions'  => __( 'Actions', 'woo-stripe-reconcile' ),
+			'order'    => __( 'Order', 'stripe-order-reconciler' ),
+			'object'   => __( 'Stripe object', 'stripe-order-reconciler' ),
+			'type'     => __( 'Type', 'stripe-order-reconciler' ),
+			'severity' => __( 'Severity', 'stripe-order-reconciler' ),
+			'states'   => __( 'Local → Stripe', 'stripe-order-reconciler' ),
+			'seen'     => __( 'Detected', 'stripe-order-reconciler' ),
+			'actions'  => __( 'Actions', 'stripe-order-reconciler' ),
 		);
 	}
 
@@ -67,8 +67,8 @@ class WSR_Drift_List_Table extends WP_List_Table {
 			return array();
 		}
 		return array(
-			'wsr_bulk_fix'     => __( 'Fix', 'woo-stripe-reconcile' ),
-			'wsr_bulk_dismiss' => __( 'Dismiss', 'woo-stripe-reconcile' ),
+			'wsr_bulk_fix'     => __( 'Fix', 'stripe-order-reconciler' ),
+			'wsr_bulk_dismiss' => __( 'Dismiss', 'stripe-order-reconciler' ),
 		);
 	}
 
@@ -86,9 +86,9 @@ class WSR_Drift_List_Table extends WP_List_Table {
 		$counts = $wpdb->get_results( "SELECT status, COUNT(*) as c FROM {$table} GROUP BY status", OBJECT_K );
 
 		$labels = array(
-			'open'      => __( 'Open', 'woo-stripe-reconcile' ),
-			'fixed'     => __( 'Fixed', 'woo-stripe-reconcile' ),
-			'dismissed' => __( 'Dismissed', 'woo-stripe-reconcile' ),
+			'open'      => __( 'Open', 'stripe-order-reconciler' ),
+			'fixed'     => __( 'Fixed', 'stripe-order-reconciler' ),
+			'dismissed' => __( 'Dismissed', 'stripe-order-reconciler' ),
 		);
 
 		$views = array();
@@ -155,7 +155,7 @@ class WSR_Drift_List_Table extends WP_List_Table {
 			case 'seen':
 				return sprintf(
 					/* translators: 1: human-readable time since detection, 2: number of times detected */
-					esc_html__( '%1$s ago (×%2$d)', 'woo-stripe-reconcile' ),
+					esc_html__( '%1$s ago (×%2$d)', 'stripe-order-reconciler' ),
 					esc_html( human_time_diff( strtotime( $item->detected_at . ' UTC' ), time() ) ),
 					(int) $item->detection_count
 				);
@@ -234,11 +234,11 @@ class WSR_Drift_List_Table extends WP_List_Table {
 			$actions[] = sprintf(
 				'<a class="button button-small button-primary" href="%s" onclick="return confirm(%s);">%s</a>',
 				esc_url( $fix_url ),
-				esc_attr( wp_json_encode( __( 'Mark this order as paid and completed based on Stripe\'s current record? This emails the customer and cannot be undone from here.', 'woo-stripe-reconcile' ) ) ),
-				esc_html__( 'Fix', 'woo-stripe-reconcile' )
+				esc_attr( wp_json_encode( __( 'Mark this order as paid and completed based on Stripe\'s current record? This emails the customer and cannot be undone from here.', 'stripe-order-reconciler' ) ) ),
+				esc_html__( 'Fix', 'stripe-order-reconciler' )
 			);
 		} elseif ( 'info' === $item->severity ) {
-			$actions[] = '<span class="description">' . esc_html__( 'No fix while disputed/under review', 'woo-stripe-reconcile' ) . '</span>';
+			$actions[] = '<span class="description">' . esc_html__( 'No fix while disputed/under review', 'stripe-order-reconciler' ) . '</span>';
 		}
 
 		$dismiss_url = wp_nonce_url(
@@ -251,12 +251,12 @@ class WSR_Drift_List_Table extends WP_List_Table {
 			),
 			WSR_Fixer::dismiss_nonce_action( $item->id )
 		);
-		$actions[] = sprintf( '<a class="button button-small" href="%s">%s</a>', esc_url( $dismiss_url ), esc_html__( 'Dismiss', 'woo-stripe-reconcile' ) );
+		$actions[] = sprintf( '<a class="button button-small" href="%s">%s</a>', esc_url( $dismiss_url ), esc_html__( 'Dismiss', 'stripe-order-reconciler' ) );
 
 		return implode( ' ', $actions ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- each entry already escaped when built above.
 	}
 
 	public function no_items() {
-		esc_html_e( 'No drift in this category.', 'woo-stripe-reconcile' );
+		esc_html_e( 'No drift in this category.', 'stripe-order-reconciler' );
 	}
 }

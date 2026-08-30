@@ -39,12 +39,12 @@ class WSR_Email_Alerts {
 		$count   = count( $new_alerts );
 		$subject = sprintf(
 			/* translators: %d: number of newly detected payment/order mismatches */
-			_n( 'Woo Stripe Reconcile: %d new payment issue found', 'Woo Stripe Reconcile: %d new payment issues found', $count, 'woo-stripe-reconcile' ),
+			_n( 'Woo Stripe Reconcile: %d new payment issue found', 'Woo Stripe Reconcile: %d new payment issues found', $count, 'stripe-order-reconciler' ),
 			$count
 		);
 
 		$lines   = array();
-		$lines[] = __( 'The following order/payment mismatches were just detected:', 'woo-stripe-reconcile' );
+		$lines[] = __( 'The following order/payment mismatches were just detected:', 'stripe-order-reconciler' );
 		$lines[] = '';
 		foreach ( $new_alerts as $alert ) {
 			$lines[] = sprintf(
@@ -58,7 +58,7 @@ class WSR_Email_Alerts {
 		$lines[] = '';
 		$lines[] = sprintf(
 			/* translators: %s: dashboard URL */
-			__( 'Review and fix at: %s', 'woo-stripe-reconcile' ),
+			__( 'Review and fix at: %s', 'stripe-order-reconciler' ),
 			admin_url( 'admin.php?page=wsr-dashboard' )
 		);
 

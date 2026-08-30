@@ -1,4 +1,4 @@
-=== WooCommerce Stripe Reconcile ===
+=== Stripe Order Reconciler for WooCommerce ===
 Contributors: eclayaz
 Tags: woocommerce, stripe, reconciliation, orders, payments
 Requires at least: 6.8

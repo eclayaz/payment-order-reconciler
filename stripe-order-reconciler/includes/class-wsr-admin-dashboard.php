@@ -20,8 +20,8 @@ class WSR_Admin_Dashboard {
 	public static function register_menu() {
 		add_submenu_page(
 			'woocommerce',
-			__( 'Stripe Reconciliation', 'woo-stripe-reconcile' ),
-			__( 'Stripe Reconciliation', 'woo-stripe-reconcile' ),
+			__( 'Stripe Reconciliation', 'stripe-order-reconciler' ),
+			__( 'Stripe Reconciliation', 'stripe-order-reconciler' ),
 			self::CAPABILITY,
 			'wsr-dashboard',
 			array( __CLASS__, 'render_page' )
@@ -48,7 +48,7 @@ class WSR_Admin_Dashboard {
 
 		?>
 		<div class="wrap">
-			<h1><?php esc_html_e( 'Stripe Reconciliation', 'woo-stripe-reconcile' ); ?></h1>
+			<h1><?php esc_html_e( 'Stripe Reconciliation', 'stripe-order-reconciler' ); ?></h1>
 			<?php self::render_notice( $notice ); ?>
 			<?php
 			// Bug fix (independent review, round 2): TECHNICAL_SPEC.md
@@ -103,7 +103,7 @@ class WSR_Admin_Dashboard {
 		check_admin_referer( 'bulk-drifts' );
 
 		if ( ! current_user_can( self::CAPABILITY ) ) {
-			wp_die( esc_html__( 'You do not have permission to do this.', 'woo-stripe-reconcile' ) );
+			wp_die( esc_html__( 'You do not have permission to do this.', 'stripe-order-reconciler' ) );
 		}
 
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- verified by check_admin_referer() just above.
@@ -146,7 +146,7 @@ class WSR_Admin_Dashboard {
 	 */
 	private static function render_bulk_fix_confirm_script() {
 		$message = wp_json_encode(
-			__( 'Mark the selected orders as paid and completed based on Stripe\'s current record? This emails each customer and cannot be undone from here.', 'woo-stripe-reconcile' )
+			__( 'Mark the selected orders as paid and completed based on Stripe\'s current record? This emails each customer and cannot be undone from here.', 'stripe-order-reconciler' )
 		);
 		?>
 		<script>
@@ -176,8 +176,8 @@ class WSR_Admin_Dashboard {
 
 	private static function render_notice( $notice ) {
 		$messages = array(
-			'fix_applied' => array( 'success', __( 'Fix applied — the order status was synced to Stripe\'s record.', 'woo-stripe-reconcile' ) ),
-			'dismissed'   => array( 'success', __( 'Drift dismissed. It will not reappear unless it recurs after being fixed.', 'woo-stripe-reconcile' ) ),
+			'fix_applied' => array( 'success', __( 'Fix applied — the order status was synced to Stripe\'s record.', 'stripe-order-reconciler' ) ),
+			'dismissed'   => array( 'success', __( 'Drift dismissed. It will not reappear unless it recurs after being fixed.', 'stripe-order-reconciler' ) ),
 			'fix_error'   => array( 'error', self::get_fix_error_message() ),
 		);
 
@@ -202,18 +202,18 @@ class WSR_Admin_Dashboard {
 		$ok = isset( $_GET['wsr_ok'] ) ? absint( $_GET['wsr_ok'] ) : 0;
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- see above.
 		$failed = isset( $_GET['wsr_failed'] ) ? absint( $_GET['wsr_failed'] ) : 0;
-		$verb   = 'bulk_fixed' === $notice ? __( 'fixed', 'woo-stripe-reconcile' ) : __( 'dismissed', 'woo-stripe-reconcile' );
+		$verb   = 'bulk_fixed' === $notice ? __( 'fixed', 'stripe-order-reconciler' ) : __( 'dismissed', 'stripe-order-reconciler' );
 
 		$text = sprintf(
 			/* translators: 1: number succeeded, 2: "fixed" or "dismissed" */
-			_n( '%1$d row %2$s.', '%1$d rows %2$s.', $ok, 'woo-stripe-reconcile' ),
+			_n( '%1$d row %2$s.', '%1$d rows %2$s.', $ok, 'stripe-order-reconciler' ),
 			$ok,
 			$verb
 		);
 		if ( $failed > 0 ) {
 			$text .= ' ' . sprintf(
 				/* translators: %d: number that could not be processed */
-				_n( '%d could not be processed — try it individually to see why (still-disputed, locked, or already resolved are the usual reasons).', '%d could not be processed — try each individually to see why (still-disputed, locked, or already resolved are the usual reasons).', $failed, 'woo-stripe-reconcile' ),
+				_n( '%d could not be processed — try it individually to see why (still-disputed, locked, or already resolved are the usual reasons).', '%d could not be processed — try each individually to see why (still-disputed, locked, or already resolved are the usual reasons).', $failed, 'stripe-order-reconciler' ),
 				$failed
 			);
 		}
@@ -223,6 +223,6 @@ class WSR_Admin_Dashboard {
 
 	private static function get_fix_error_message() {
 		$message = get_transient( 'wsr_fix_error_' . get_current_user_id() );
-		return $message ? $message : __( 'The fix could not be applied.', 'woo-stripe-reconcile' );
+		return $message ? $message : __( 'The fix could not be applied.', 'stripe-order-reconciler' );
 	}
 }

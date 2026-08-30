@@ -37,7 +37,7 @@ class WSR_Stripe_Client {
 	 */
 	public function get( $path, array $query = array() ) {
 		if ( '' === $this->api_key ) {
-			return new WP_Error( 'wsr_no_api_key', __( 'No Stripe API key is configured.', 'woo-stripe-reconcile' ) );
+			return new WP_Error( 'wsr_no_api_key', __( 'No Stripe API key is configured.', 'stripe-order-reconciler' ) );
 		}
 
 		$url = self::API_BASE . ltrim( $path, '/' );
@@ -69,7 +69,7 @@ class WSR_Stripe_Client {
 		if ( $code < 200 || $code >= 300 ) {
 			$message     = isset( $body['error']['message'] ) ? $body['error']['message'] : sprintf(
 				/* translators: %d: HTTP status code */
-				__( 'Stripe API returned HTTP %d.', 'woo-stripe-reconcile' ),
+				__( 'Stripe API returned HTTP %d.', 'stripe-order-reconciler' ),
 				$code
 			);
 			$stripe_code = isset( $body['error']['code'] ) ? $body['error']['code'] : '';
@@ -86,7 +86,7 @@ class WSR_Stripe_Client {
 		}
 
 		if ( ! is_array( $body ) ) {
-			return new WP_Error( 'wsr_stripe_invalid_response', __( 'Stripe API returned an unexpected response.', 'woo-stripe-reconcile' ) );
+			return new WP_Error( 'wsr_stripe_invalid_response', __( 'Stripe API returned an unexpected response.', 'stripe-order-reconciler' ) );
 		}
 
 		return $body;

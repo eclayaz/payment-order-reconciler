@@ -1,6 +1,6 @@
 # Problem Statement — WooCommerce Stripe Order Reconciliation
 
-Working name: **woo-stripe-reconcile** (placeholder, not final)
+Working name during development: `woo-stripe-reconcile`. Final public name (chosen at WP.org rollout planning, 2026-08-30, to avoid the WooCommerce trademark restriction on plugin names leading with "WooCommerce"): **Stripe Order Reconciler for WooCommerce**, slug `stripe-order-reconciler`.
 
 > Revised 2026-08-29, three times. First pass: independent review verified/corrected the evidence base against GitHub and Stripe docs. Second pass: a follow-up review found corrections that were individually right but hadn't been traced into consequences elsewhere. Third pass: a follow-up review found the fact base now solid, but found that new mechanisms introduced in the second rewrite didn't compose with each other (a permanent-vs-live-checked dispute exclusion, an unbuildable database constraint, two undefined-behavior drift types, an audit log that could misattribute who fixed what). All three passes' corrections are kept inline.
 

@@ -14,7 +14,7 @@ echo "==> Activating plugins in dependency order"
 # WSR_Activator::dependencies_met_at_activation()).
 $WP_CLI wp plugin activate woocommerce
 $WP_CLI wp plugin activate woocommerce-gateway-stripe
-$WP_CLI wp plugin activate woo-stripe-reconcile
+$WP_CLI wp plugin activate stripe-order-reconciler
 
 echo "==> Basic WooCommerce config (skip onboarding, disable tracking, pretty permalinks)"
 $WP_CLI wp option update woocommerce_allow_tracking "no"
@@ -26,7 +26,7 @@ $WP_CLI wp plugin list --status=active --field=name
 
 echo "==> Checking debug.log for fatal errors or warnings from our plugin"
 if $WP_CLI wp eval 'echo file_exists(WP_CONTENT_DIR . "/debug.log") ? "yes" : "no";' | grep -q yes; then
-	$WP_CLI wp eval 'echo file_get_contents(WP_CONTENT_DIR . "/debug.log");' | grep -i "woo-stripe-reconcile\|wsr_\|WSR_" || echo "(no matching log lines — good sign, but check manually for anything unrelated too)"
+	$WP_CLI wp eval 'echo file_get_contents(WP_CONTENT_DIR . "/debug.log");' | grep -i "stripe-order-reconciler\|wsr_\|WSR_" || echo "(no matching log lines — good sign, but check manually for anything unrelated too)"
 else
 	echo "(no debug.log yet — nothing has errored)"
 fi
