@@ -89,7 +89,7 @@ woo-stripe-reconcile/
 
 ### Setup
 1-2. Unchanged: activation dependency check; `dbDelta` table creation including the `open_key` generated column and its unique index; `schema_version` set.
-3. Settings screen, restricted key. **Scope list, corrected to six (a prior revision said "four" in one place while listing five elsewhere; this revision adds a sixth):** `PaymentIntents:Read`, `Charges:Read`, `Checkout Sessions:Read`, `Events:Read`, `Webhook Endpoints:Read`, and **`Disputes:Read`** (new this revision — needed for the corrected live dispute-status check). All six confirmed to exist as discrete Stripe restricted-key resources — first via research, and now via an actual sandbox key run against `WSR_Stripe_Client::check_scopes()` (2026-08-30): PaymentIntents, Charges, Checkout Sessions, Events, Webhook Endpoints, and Disputes (Core, not Issuing) all returned OK against a key scoped to exactly those six. No longer an open verification item at all.
+3. Settings screen, restricted key. **Scope list, corrected to seven** (a prior revision corrected it to six, adding `Disputes:Read`; this revision adds a seventh, `Reviews:Read`, found missing the same way — a real Pass A run, not `check_scopes()`, is what actually caught it): `PaymentIntents:Read`, `Charges:Read`, `Checkout Sessions:Read`, `Events:Read`, `Webhook Endpoints:Read`, `Disputes:Read`, and **`Reviews:Read`** — needed because Pass A's own PaymentIntents list call expands `data.latest_charge.review` for the live Radar-review downgrade check, and Stripe gates that expand behind this separate permission (`review_read`), distinct from `Disputes:Read`. Found 2026-08-30: a live sandbox key scoped to exactly the prior six "confirmed" scopes failed Pass A's very first page fetch outright, because `WSR_Stripe_Client::check_scopes()` never actually tested for this one — the six-scope confirmation two revisions ago was only as complete as what it checked. `check_scopes()` now includes `Reviews:Read`; all seven confirmed to exist as discrete Stripe restricted-key resources.
 4-6. Unchanged: `WSR_STRIPE_RESTRICTED_KEY` constant or encrypted option; environment detection via `wp_get_environment_type()` plus a restricted-key-prefix (`rk_live_`/`rk_test_` — corrected from an earlier, wrong `pk_`-prefix version) fallback check; run the webhook health-check on setup.
 
 ### Real-time signal (accelerator/telemetry only, never a resolver)
@@ -133,7 +133,7 @@ No bundled SDK — raw `wp_remote_get()`, matching the reference implementation.
 - `GET /v1/events` (Pass B diagnostic).
 - `GET /v1/webhook_endpoints` (health-check).
 
-Restricted key scopes: `PaymentIntents:Read`, `Charges:Read`, `Checkout Sessions:Read`, `Events:Read`, `Webhook Endpoints:Read`, `Disputes:Read` — six, confirmed to exist.
+Restricted key scopes: `PaymentIntents:Read`, `Charges:Read`, `Checkout Sessions:Read`, `Events:Read`, `Webhook Endpoints:Read`, `Disputes:Read`, `Reviews:Read` — seven, confirmed to exist.
 
 ## Compliance & standards
 

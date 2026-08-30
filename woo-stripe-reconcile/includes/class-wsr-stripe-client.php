@@ -144,6 +144,18 @@ class WSR_Stripe_Client {
 			'Events:Read'            => array( 'events', array( 'limit' => 1 ) ),
 			'Webhook Endpoints:Read' => array( 'webhook_endpoints', array( 'limit' => 1 ) ),
 			'Disputes:Read'          => array( 'disputes', array( 'limit' => 1 ) ),
+			// Bug found via a real Pass A run against a live sandbox key
+			// scoped to exactly the other six (2026-08-30): Pass A's own
+			// PaymentIntents list call requests `expand:
+			// data.latest_charge.review` for the live Radar-review
+			// downgrade check, and that expand requires a *separate*
+			// `review_read` permission Stripe calls "Reviews Read" — not
+			// covered by Disputes:Read, and never checked here, so this
+			// screen previously showed all-green while every real run
+			// failed outright on its very first page fetch. Listing
+			// reviews directly is the cheapest real call that needs
+			// exactly this permission.
+			'Reviews:Read'           => array( 'reviews', array( 'limit' => 1 ) ),
 		);
 
 		$results = array();

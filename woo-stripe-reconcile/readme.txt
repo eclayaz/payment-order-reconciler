@@ -25,6 +25,7 @@ This plugin communicates directly with the Stripe API (`api.stripe.com`) using a
 * Events — to check whether your webhook endpoint is currently receiving deliveries.
 * Webhook Endpoints — to verify your configured endpoint URL is correct and reachable.
 * Disputes — to avoid acting on an order that's currently under an active payment dispute.
+* Reviews — to avoid acting on an order whose charge is currently held for manual review by Stripe Radar.
 
 No data is sent to any server other than Stripe's own API and your own WordPress site. See Stripe's Privacy Policy: https://stripe.com/privacy and Terms of Service: https://stripe.com/legal/consumer
 

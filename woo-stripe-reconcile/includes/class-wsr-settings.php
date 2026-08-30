@@ -226,7 +226,7 @@ class WSR_Settings {
 			<p>
 				<?php
 				esc_html_e(
-					'Paste a Stripe restricted, read-only API key here. It should never have permission to charge, refund, or move money — only to read PaymentIntents, Charges, Checkout Sessions, Events, Webhook Endpoints, and Disputes. Create one in Stripe under Developers → API keys → Create restricted key, setting exactly those six resources to Read and everything else to None.',
+					'Paste a Stripe restricted, read-only API key here. It should never have permission to charge, refund, or move money — only to read PaymentIntents, Charges, Checkout Sessions, Events, Webhook Endpoints, Disputes, and Reviews. Create one in Stripe under Developers → API keys → Create restricted key, setting exactly those seven resources to Read and everything else to None.',
 					'woo-stripe-reconcile'
 				);
 				?>
