@@ -43,6 +43,14 @@ class WSR_Admin_Dashboard {
 		<div class="wrap">
 			<h1><?php esc_html_e( 'Stripe Reconciliation', 'woo-stripe-reconcile' ); ?></h1>
 			<?php self::render_notice( $notice ); ?>
+			<?php
+			// Bug fix (independent review, round 2): TECHNICAL_SPEC.md
+			// names "last successful run" and webhook health as primary
+			// dashboard elements — they only ever lived on the Settings
+			// screen. Shared with WSR_Settings' own coverage block rather
+			// than duplicated, so both stay in sync automatically.
+			WSR_Settings::render_coverage_status();
+			?>
 			<form method="get">
 				<input type="hidden" name="page" value="wsr-dashboard" />
 				<?php $table->views(); ?>

@@ -4,7 +4,7 @@ Tags: woocommerce, stripe, reconciliation, orders, payments
 Requires at least: 6.8
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 0.1.0-dev
+Stable tag: 1.0.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -40,5 +40,10 @@ No. It only ever reads from Stripe and writes to your own WooCommerce order stat
 
 == Changelog ==
 
-= 0.1.0-dev =
-* Initial scaffolding: activation, dependency checks, database tables.
+= 1.0.0 =
+* Pass A: bulk PaymentIntent list-and-diff against local orders, detecting stuck-pending orders, wrongly-cancelled paid orders, and orphaned charges with no matching order.
+* Pass B: undelivered-webhook diagnostic, and a webhook-endpoint health check.
+* Real-time auto-resolve via WooCommerce/gateway hooks, in addition to the daily scheduled pass.
+* Admin dashboard with Open/Fixed/Dismissed views and one-click Fix/Dismiss actions, each re-verifying live Stripe state immediately before acting.
+* Settings screen: restricted-key entry with scope validation, alert email, coverage status.
+* Full PHPUnit test suite; independently reviewed across four rounds (spec x3, code x1) before release.

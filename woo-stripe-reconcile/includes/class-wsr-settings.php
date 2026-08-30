@@ -1,9 +1,8 @@
 <?php
 /**
  * Settings screen: restricted API key entry + validation, environment
- * mismatch warning. The drift dashboard is a separate class added in a
- * later build-order step (TECHNICAL_SPEC.md step 6) — this one is settings
- * only, per step 2.
+ * mismatch warning, coverage status. The drift dashboard itself lives in
+ * WSR_Admin_Dashboard.
  */
 
 defined( 'ABSPATH' ) || exit;
@@ -307,9 +306,9 @@ class WSR_Settings {
 				<hr />
 				<?php self::render_coverage_status(); ?>
 
-				<h2><?php esc_html_e( 'Manual reconciliation (testing)', 'woo-stripe-reconcile' ); ?></h2>
+				<h2><?php esc_html_e( 'Manual reconciliation', 'woo-stripe-reconcile' ); ?></h2>
 				<p class="description">
-					<?php esc_html_e( 'Temporary testing affordance — this becomes a proper dashboard with Fix/Dismiss actions in a later step. Runs the same three steps the daily scheduled job runs: Pass A (reconciliation), Pass B (undelivered-webhook diagnostic), and the webhook endpoint health-check.', 'woo-stripe-reconcile' ); ?>
+					<?php esc_html_e( 'Runs the same three steps the daily scheduled job runs: Pass A (reconciliation), Pass B (undelivered-webhook diagnostic), and the webhook endpoint health-check — useful right after saving a key, or any time you don\'t want to wait for the next scheduled run. See the Drift Log dashboard for results.', 'woo-stripe-reconcile' ); ?>
 				</p>
 				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
 					<?php wp_nonce_field( self::NONCE_ACTION_RUN ); ?>
@@ -318,7 +317,6 @@ class WSR_Settings {
 				</form>
 
 				<?php self::render_pass_a_result(); ?>
-				<?php self::render_drift_log_preview(); ?>
 			<?php endif; ?>
 		</div>
 		<?php
@@ -330,14 +328,33 @@ class WSR_Settings {
 	 * TECHNICAL_SPEC.md calls for as a primary dashboard element in step 6.
 	 * Reads the options run_all() updates on every run, scheduled or manual.
 	 */
-	private static function render_coverage_status() {
-		$last_run_at    = get_option( 'wsr_last_run_at', '' );
-		$pass_b         = get_option( 'wsr_last_pass_b_result', array() );
-		$webhook_health = get_option( 'wsr_last_webhook_health_result', array() );
+	public static function render_coverage_status() {
+		$last_run_at      = get_option( 'wsr_last_run_at', '' );
+		$last_run_failure = get_option( 'wsr_last_run_failure', array() );
+		$pass_b           = get_option( 'wsr_last_pass_b_result', array() );
+		$webhook_health   = get_option( 'wsr_last_webhook_health_result', array() );
 
 		echo '<h3>' . esc_html__( 'Coverage', 'woo-stripe-reconcile' ) . '</h3>';
 
-		if ( '' === $last_run_at ) {
+		// Bug fix (independent review, round 2): wsr_last_run_at is now
+		// written only on a genuinely successful run (see run_all()) — a
+		// revoked/invalid key used to leave this green even though nothing
+		// was actually detected. Surface the failure explicitly whenever
+		// it's the more recent event, rather than silently falling back to
+		// a stale (or absent) success timestamp.
+		$failure_is_newer = ! empty( $last_run_failure['at'] )
+			&& ( '' === $last_run_at || strtotime( $last_run_failure['at'] . ' UTC' ) > strtotime( $last_run_at . ' UTC' ) );
+
+		if ( $failure_is_newer ) {
+			echo '<p><span style="color:#b32d2e;">&#9679;</span> ';
+			printf(
+				/* translators: 1: human-readable time difference, e.g. "3 hours", 2: the underlying error message */
+				esc_html__( 'Last run attempt failed %1$s ago: %2$s', 'woo-stripe-reconcile' ),
+				esc_html( human_time_diff( strtotime( $last_run_failure['at'] . ' UTC' ), time() ) ),
+				esc_html( $last_run_failure['error'] )
+			);
+			echo '</p>';
+		} elseif ( '' === $last_run_at ) {
 			echo '<p><span style="color:#b32d2e;">&#9679;</span> ' . esc_html__( 'No reconciliation run has completed yet.', 'woo-stripe-reconcile' ) . '</p>';
 		} else {
 			$hours_ago = ( time() - strtotime( $last_run_at . ' UTC' ) ) / HOUR_IN_SECONDS;
@@ -345,7 +362,7 @@ class WSR_Settings {
 			echo '<p><span style="color:' . esc_attr( $color ) . ';">&#9679;</span> ';
 			printf(
 				/* translators: %s: human-readable time difference, e.g. "3 hours" */
-				esc_html__( 'Last run: %s ago.', 'woo-stripe-reconcile' ),
+				esc_html__( 'Last successful run: %s ago.', 'woo-stripe-reconcile' ),
 				esc_html( human_time_diff( strtotime( $last_run_at . ' UTC' ), time() ) )
 			);
 			echo '</p>';
@@ -422,48 +439,6 @@ class WSR_Settings {
 		if ( ! empty( $pass_a['errors'] ) ) {
 			echo '<div class="notice notice-error inline"><p>' . esc_html( implode( '; ', $pass_a['errors'] ) ) . '</p></div>';
 		}
-	}
-
-	/**
-	 * Raw preview of the most recent drift_log rows — a stand-in for the
-	 * real admin dashboard (TECHNICAL_SPEC.md build-order step 6), just
-	 * enough to see what Pass A actually wrote during manual testing.
-	 */
-	private static function render_drift_log_preview() {
-		global $wpdb;
-		$table = $wpdb->prefix . 'wsr_drift_log';
-
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared -- $table is our own constant prefix; read-only preview, no user input.
-		$rows = $wpdb->get_results( "SELECT * FROM {$table} ORDER BY detected_at DESC LIMIT 50" );
-
-		if ( empty( $rows ) ) {
-			echo '<p>' . esc_html__( 'No drift recorded yet.', 'woo-stripe-reconcile' ) . '</p>';
-			return;
-		}
-
-		echo '<h3>' . esc_html__( 'Drift log (most recent 50)', 'woo-stripe-reconcile' ) . '</h3>';
-		echo '<table class="widefat"><thead><tr>
-			<th>' . esc_html__( 'Order', 'woo-stripe-reconcile' ) . '</th>
-			<th>' . esc_html__( 'Stripe object', 'woo-stripe-reconcile' ) . '</th>
-			<th>' . esc_html__( 'Type', 'woo-stripe-reconcile' ) . '</th>
-			<th>' . esc_html__( 'Severity', 'woo-stripe-reconcile' ) . '</th>
-			<th>' . esc_html__( 'Status', 'woo-stripe-reconcile' ) . '</th>
-			<th>' . esc_html__( 'Local → Stripe', 'woo-stripe-reconcile' ) . '</th>
-			<th>' . esc_html__( 'Seen', 'woo-stripe-reconcile' ) . '</th>
-		</tr></thead><tbody>';
-
-		foreach ( $rows as $row ) {
-			echo '<tr>';
-			echo '<td>' . ( $row->order_id ? esc_html( '#' . $row->order_id ) : '—' ) . '</td>';
-			echo '<td><code>' . esc_html( $row->stripe_object_id ) . '</code></td>';
-			echo '<td>' . esc_html( $row->drift_type ) . '</td>';
-			echo '<td>' . esc_html( $row->severity ) . '</td>';
-			echo '<td>' . esc_html( $row->status ) . '</td>';
-			echo '<td>' . esc_html( $row->local_status_at_detection . ' → ' . $row->stripe_status_at_detection ) . '</td>';
-			echo '<td>' . esc_html( $row->detected_at ) . ' (&times;' . (int) $row->detection_count . ')</td>';
-			echo '</tr>';
-		}
-		echo '</tbody></table>';
 	}
 
 	private static function render_notice( $notice ) {

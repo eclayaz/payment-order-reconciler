@@ -183,6 +183,13 @@ class WSR_Drift_List_Table extends WP_List_Table {
 		$can_fix = in_array( $item->drift_type, array( 'stuck_pending', 'wrongly_cancelled_paid' ), true )
 			&& 'info' !== $item->severity;
 
+		// Bug fix (independent review, round 2): a single shared
+		// NONCE_FIX/NONCE_DISMISS action meant a nonce lifted from one
+		// row's link would also verify against any other row — same
+		// capability either way so not a privilege escalation, but it
+		// weakens per-object CSRF protection more than it needs to. A
+		// nonce scoped to the specific drift_id (WSR_Fixer::fix_nonce_action())
+		// only ever verifies for that one row.
 		if ( $can_fix ) {
 			$fix_url    = wp_nonce_url(
 				add_query_arg(
@@ -192,9 +199,14 @@ class WSR_Drift_List_Table extends WP_List_Table {
 					),
 					admin_url( 'admin-post.php' )
 				),
-				WSR_Fixer::NONCE_FIX
+				WSR_Fixer::fix_nonce_action( $item->id )
 			);
-			$actions[] = sprintf( '<a class="button button-small button-primary" href="%s">%s</a>', esc_url( $fix_url ), esc_html__( 'Fix', 'woo-stripe-reconcile' ) );
+			$actions[] = sprintf(
+				'<a class="button button-small button-primary" href="%s" onclick="return confirm(%s);">%s</a>',
+				esc_url( $fix_url ),
+				esc_attr( wp_json_encode( __( 'Mark this order as paid and completed based on Stripe\'s current record? This emails the customer and cannot be undone from here.', 'woo-stripe-reconcile' ) ) ),
+				esc_html__( 'Fix', 'woo-stripe-reconcile' )
+			);
 		} elseif ( 'info' === $item->severity ) {
 			$actions[] = '<span class="description">' . esc_html__( 'No fix while disputed/under review', 'woo-stripe-reconcile' ) . '</span>';
 		}
@@ -207,7 +219,7 @@ class WSR_Drift_List_Table extends WP_List_Table {
 				),
 				admin_url( 'admin-post.php' )
 			),
-			WSR_Fixer::NONCE_DISMISS
+			WSR_Fixer::dismiss_nonce_action( $item->id )
 		);
 		$actions[] = sprintf( '<a class="button button-small" href="%s">%s</a>', esc_url( $dismiss_url ), esc_html__( 'Dismiss', 'woo-stripe-reconcile' ) );
 

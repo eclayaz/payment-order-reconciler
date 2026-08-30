@@ -16,7 +16,12 @@ class HookListenerTest extends WSR_TestCase {
 	}
 
 	private function auto_resolve_open_drift( $order_id ) {
-		return $this->call_private( WSR_Hook_Listener::class, 'auto_resolve_open_drift', array( $order_id ) );
+		// Bug fix (independent review, round 2): this logic moved to
+		// WSR_Reconciler::auto_resolve_open_drift_for_order() so Pass A's
+		// own no-drift re-check can share it — see ReconcilerChecksTest
+		// for the Pass-A-triggered coverage. This test keeps its original
+		// home since it's exercising the same webhook-triggered call path.
+		return WSR_Reconciler::auto_resolve_open_drift_for_order( $order_id );
 	}
 
 	// --- is_dispute_notification -------------------------------------------

@@ -46,21 +46,38 @@ class WSR_Fixer {
 		add_action( 'admin_post_wsr_dismiss_drift', array( __CLASS__, 'handle_dismiss' ) );
 	}
 
+	/**
+	 * Bug fix (independent review, round 2): a per-row-scoped nonce action
+	 * name, instead of one shared NONCE_FIX/NONCE_DISMISS constant for
+	 * every row — a nonce lifted from one row's link used to also verify
+	 * against any other row (same capability either way, so not a
+	 * privilege escalation, but weaker per-object CSRF protection than it
+	 * needs to be).
+	 */
+	public static function fix_nonce_action( $drift_id ) {
+		return self::NONCE_FIX . '_' . (int) $drift_id;
+	}
+
+	public static function dismiss_nonce_action( $drift_id ) {
+		return self::NONCE_DISMISS . '_' . (int) $drift_id;
+	}
+
 	public static function handle_fix() {
 		if ( ! current_user_can( self::CAPABILITY ) ) {
 			wp_die( esc_html__( 'You do not have permission to do this.', 'woo-stripe-reconcile' ) );
 		}
-		check_admin_referer( self::NONCE_FIX );
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read only to build the nonce action name below; check_admin_referer() immediately after is the actual verification, before any effectful action.
+		$drift_id = isset( $_REQUEST['drift_id'] ) ? absint( $_REQUEST['drift_id'] ) : 0;
+		check_admin_referer( self::fix_nonce_action( $drift_id ) );
 
-		$drift_id = isset( $_REQUEST['drift_id'] ) ? absint( $_REQUEST['drift_id'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- verified by check_admin_referer() just above; dashboard row actions are plain nonce-protected GET links, not forms.
-		$result   = self::apply_fix( $drift_id, get_current_user_id() );
+		$result = self::apply_fix( $drift_id, get_current_user_id() );
 
 		$notice = is_wp_error( $result ) ? 'fix_error' : 'fix_applied';
 		if ( is_wp_error( $result ) ) {
 			set_transient( 'wsr_fix_error_' . get_current_user_id(), $result->get_error_message(), 5 * MINUTE_IN_SECONDS );
 		}
 
-		wp_safe_redirect( add_query_arg( 'wsr_notice', $notice, wp_get_referer() ) );
+		wp_safe_redirect( add_query_arg( 'wsr_notice', $notice, self::redirect_target() ) );
 		exit;
 	}
 
@@ -68,9 +85,10 @@ class WSR_Fixer {
 		if ( ! current_user_can( self::CAPABILITY ) ) {
 			wp_die( esc_html__( 'You do not have permission to do this.', 'woo-stripe-reconcile' ) );
 		}
-		check_admin_referer( self::NONCE_DISMISS );
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read only to build the nonce action name below; check_admin_referer() immediately after is the actual verification, before any effectful action.
+		$drift_id = isset( $_REQUEST['drift_id'] ) ? absint( $_REQUEST['drift_id'] ) : 0;
+		check_admin_referer( self::dismiss_nonce_action( $drift_id ) );
 
-		$drift_id = isset( $_REQUEST['drift_id'] ) ? absint( $_REQUEST['drift_id'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- verified by check_admin_referer() just above; dashboard row actions are plain nonce-protected GET links, not forms.
 		global $wpdb;
 		$table = $wpdb->prefix . 'wsr_drift_log';
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- no wpdb abstraction exists for this table.
@@ -85,8 +103,18 @@ class WSR_Fixer {
 			array( '%d', '%s' )
 		);
 
-		wp_safe_redirect( add_query_arg( 'wsr_notice', 'dismissed', wp_get_referer() ) );
+		wp_safe_redirect( add_query_arg( 'wsr_notice', 'dismissed', self::redirect_target() ) );
 		exit;
+	}
+
+	/**
+	 * wp_get_referer() can return false (e.g. no Referer header sent) —
+	 * add_query_arg( ..., false ) degrades in a way that produces a
+	 * broken redirect URL. Falls back to the dashboard itself, which is
+	 * where every row action originates from anyway.
+	 */
+	private static function redirect_target() {
+		return wp_get_referer() ?: admin_url( 'admin.php?page=wsr-dashboard' );
 	}
 
 	/**
@@ -129,7 +157,17 @@ class WSR_Fixer {
 			return new WP_Error( 'wsr_order_missing', __( 'The associated order no longer exists.', 'woo-stripe-reconcile' ) );
 		}
 
-		if ( class_exists( 'WC_Stripe_Order_Helper' ) && self::is_locked( $order ) ) {
+		// Bug fix (independent review, round 2): this used to be
+		// `class_exists(...) && self::is_locked(...)` — if the gateway
+		// ever renamed or removed WC_Stripe_Order_Helper, the whole
+		// condition would short-circuit false and this destructive path
+		// would proceed with NO lock check at all, silently failing open
+		// on safety-critical logic. Missing the helper class now refuses
+		// the fix outright instead.
+		if ( ! class_exists( 'WC_Stripe_Order_Helper' ) ) {
+			return new WP_Error( 'wsr_lock_check_unavailable', __( 'Cannot verify the gateway\'s own lock state before fixing — the WooCommerce Stripe Payment Gateway plugin may be missing or an incompatible version.', 'woo-stripe-reconcile' ) );
+		}
+		if ( self::is_locked( $order ) ) {
 			return new WP_Error( 'wsr_locked', __( 'This order is currently locked by the Stripe gateway\'s own webhook processing — try again in a few minutes.', 'woo-stripe-reconcile' ) );
 		}
 
@@ -282,11 +320,21 @@ class WSR_Fixer {
 	}
 
 	/**
-	 * Idempotency guard for the fix itself — one meta key holding a JSON
-	 * list of already-fixed stripe_object_ids, not a per-fix dynamic meta
-	 * key (which would grow unbounded). wsr_drift_log remains the
-	 * authoritative, queryable fix history regardless; this is just a
-	 * fast guard.
+	 * Order-level fix history — one meta key holding a JSON list of every
+	 * stripe_object_id ever fixed on this order, not a per-fix dynamic
+	 * meta key (which would grow unbounded). wsr_drift_log.status is the
+	 * actual, authoritative guard against re-applying a fix (apply_fix()
+	 * refuses any row that isn't 'open' before this is ever reached) —
+	 * this meta is never read back and must not become one either: a
+	 * fixed row's NULL open_key deliberately allows the *same*
+	 * stripe_object_id to be flagged and fixed again for a genuinely new
+	 * future occurrence (see ReconcilerUpsertDriftTest's
+	 * test_fixed_rows_do_not_block_a_genuinely_new_future_occurrence), so
+	 * "already appears in this list" is not a valid reason to block a
+	 * fix. This is a human-readable audit trail on the order itself,
+	 * nothing more — a prior version of this comment called it an
+	 * idempotency guard, which it was never actually used as (independent
+	 * review, round 2).
 	 */
 	private static function track_fix_applied( WC_Order $order, $stripe_object_id ) {
 		$applied = $order->get_meta( '_wsr_fix_applied' );

@@ -160,6 +160,26 @@ class ReconcilerChecksTest extends WSR_TestCase {
 		$this->assertNull( $drift );
 	}
 
+	public function test_wrongly_cancelled_also_covers_failed_status() {
+		// Bug fix (independent review, round 2): FEATURES.md's own
+		// documented list for payment_complete() is
+		// cancelled/pending/on-hold/failed — 'failed' was never actually
+		// checked here, leaving a paid order stuck in 'failed' undetected.
+		$order = $this->make_order( 'failed' );
+		$drift = $this->check_wrongly_cancelled( $order, $this->base_pi() );
+		$this->assertIsArray( $drift );
+		$this->assertSame( 'wrongly_cancelled_paid', $drift['drift_type'] );
+		$this->assertSame( 'critical', $drift['severity'] );
+		$this->assertSame( 'failed', $drift['local_status'] );
+	}
+
+	public function test_wrongly_cancelled_failed_status_excludes_lost_dispute_too() {
+		$order = $this->make_order( 'failed' );
+		$pi    = $this->base_pi( array( 'latest_charge' => array( 'dispute' => array( 'status' => 'lost' ) ) ) );
+		$drift = $this->check_wrongly_cancelled( $order, $pi );
+		$this->assertNull( $drift, 'A lost dispute is the documented legitimate reason for failed status — same exclusion as cancelled.' );
+	}
+
 	public function test_wrongly_cancelled_excludes_uncaptured_charge() {
 		$order = $this->make_order( 'cancelled' );
 		$pi    = $this->base_pi( array( 'latest_charge' => array( 'captured' => false ) ) );
@@ -202,5 +222,50 @@ class ReconcilerChecksTest extends WSR_TestCase {
 		$drift = $this->check_wrongly_cancelled( $order, $pi );
 		$this->assertIsArray( $drift, 'A won dispute does not excuse a wrongly-cancelled-while-paid order — only a lost one does.' );
 		$this->assertSame( 'critical', $drift['severity'] );
+	}
+
+	// --- unexpanded dispute/review must fail safe, not silently as "none" ---
+	//
+	// Bug (independent review, round 2): a bare unexpanded dispute/review
+	// ID (a string, not an array — what Stripe returns when the caller
+	// didn't request the expand) was indistinguishable from "no
+	// dispute/review at all." Every caller in this codebase does request
+	// the expand today, so this wasn't reachable in practice — but it
+	// fails in the unsafe direction, on the highest-severity check class
+	// in this project's history, so it's covered directly here rather
+	// than only through callers that happen to always expand correctly.
+
+	public function test_wrongly_cancelled_unexpanded_dispute_downgrades_to_info_not_critical() {
+		$order = $this->make_order( 'cancelled' );
+		$pi    = $this->base_pi( array( 'latest_charge' => array( 'dispute' => 'dp_unexpanded_id' ) ) );
+		$drift = $this->check_wrongly_cancelled( $order, $pi );
+		$this->assertIsArray( $drift, 'An unverifiable dispute must still be detected, not excluded outright.' );
+		$this->assertSame( 'info', $drift['severity'], 'Unknown dispute state must fail toward "not confidently actionable," never toward "clean."' );
+	}
+
+	public function test_wrongly_cancelled_unexpanded_dispute_is_not_treated_as_lost() {
+		// The most dangerous direction: if 'unknown' were ever conflated
+		// with 'lost', this would wrongly exclude a charge that might
+		// actually still need review.
+		$order = $this->make_order( 'cancelled' );
+		$pi    = $this->base_pi( array( 'latest_charge' => array( 'dispute' => 'dp_unexpanded_id' ) ) );
+		$drift = $this->check_wrongly_cancelled( $order, $pi );
+		$this->assertNotNull( $drift, 'Unknown must never be silently excluded the way a confirmed-lost dispute is.' );
+	}
+
+	public function test_stuck_pending_unexpanded_dispute_downgrades_to_info() {
+		$order = $this->make_order( 'pending' );
+		$pi    = $this->base_pi( array( 'latest_charge' => array( 'dispute' => 'dp_unexpanded_id' ) ) );
+		$drift = $this->check_stuck_pending( $order, $pi );
+		$this->assertIsArray( $drift );
+		$this->assertSame( 'info', $drift['severity'] );
+	}
+
+	public function test_stuck_pending_unexpanded_review_downgrades_to_info() {
+		$order = $this->make_order( 'pending' );
+		$pi    = $this->base_pi( array( 'latest_charge' => array( 'review' => 'prv_unexpanded_id' ) ) );
+		$drift = $this->check_stuck_pending( $order, $pi );
+		$this->assertIsArray( $drift );
+		$this->assertSame( 'info', $drift['severity'], 'An unexpanded review field is unverifiable, not "no review."' );
 	}
 }

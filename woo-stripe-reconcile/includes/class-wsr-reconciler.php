@@ -74,7 +74,41 @@ class WSR_Reconciler {
 
 		update_option( 'wsr_last_pass_b_result', is_wp_error( $pass_b ) ? array( 'error' => $pass_b->get_error_message() ) : $pass_b, false );
 		update_option( 'wsr_last_webhook_health_result', is_wp_error( $webhook_health ) ? array( 'error' => $webhook_health->get_error_message() ) : $webhook_health, false );
-		update_option( 'wsr_last_run_at', current_time( 'mysql', true ), false );
+
+		// Bug fix (independent review, round 2): this used to be written
+		// unconditionally, so a revoked/invalid API key showed a healthy
+		// green "last run" indicator on the settings screen while detecting
+		// nothing at all — reproduced with a bad key: pages_fetched=0,
+		// an "Invalid API Key provided" error, and this option still
+		// updated. FEATURES.md's own coverage indicator calls for "last
+		// *successful* run" specifically. A run that returned a top-level
+		// WP_Error (no key configured) or hit a mid-run API error (this
+		// window's coverage is incomplete) doesn't count.
+		$pass_a_succeeded = ! is_wp_error( $pass_a ) && empty( $pass_a['errors'] ) && empty( $pass_a['window_truncated'] );
+		if ( $pass_a_succeeded ) {
+			update_option( 'wsr_last_run_at', current_time( 'mysql', true ), false );
+		} else {
+			$error = __( 'Unknown error.', 'woo-stripe-reconcile' );
+			if ( is_wp_error( $pass_a ) ) {
+				$error = $pass_a->get_error_message();
+			} elseif ( ! empty( $pass_a['errors'] ) ) {
+				$error = implode( '; ', $pass_a['errors'] );
+			} elseif ( ! empty( $pass_a['window_truncated'] ) ) {
+				$error = sprintf(
+					/* translators: %d: the pagination cap that was hit, e.g. 50 */
+					__( 'The %d-page pagination cap was reached with more PaymentIntents still available — this run only covered part of the 30-day window.', 'woo-stripe-reconcile' ),
+					self::MAX_PAGES
+				);
+			}
+			update_option(
+				'wsr_last_run_failure',
+				array(
+					'at'    => current_time( 'mysql', true ),
+					'error' => $error,
+				),
+				false
+			);
+		}
 
 		if ( ! is_wp_error( $pass_a ) && ! empty( $pass_a['new_alerts'] ) && class_exists( 'WSR_Email_Alerts' ) ) {
 			WSR_Email_Alerts::maybe_send( $pass_a['new_alerts'] );
@@ -92,16 +126,21 @@ class WSR_Reconciler {
 	 * "Run now" button in the prior build-order step; now also wrapped by
 	 * run_all() for the scheduled daily job.
 	 *
+	 * @param WSR_Stripe_Client|null $client Optional injected client, for
+	 *                                       tests only — production callers
+	 *                                       never pass this.
 	 * @return array|WP_Error Summary counts on success, WP_Error if the
 	 *                         Stripe API key isn't usable at all.
 	 */
-	public static function run_pass_a() {
-		$api_key = WSR_Settings::get_api_key();
-		if ( '' === $api_key ) {
-			return new WP_Error( 'wsr_no_api_key', __( 'No Stripe API key is configured — save one on the settings screen first.', 'woo-stripe-reconcile' ) );
+	public static function run_pass_a( WSR_Stripe_Client $client = null ) {
+		if ( null === $client ) {
+			$api_key = WSR_Settings::get_api_key();
+			if ( '' === $api_key ) {
+				return new WP_Error( 'wsr_no_api_key', __( 'No Stripe API key is configured — save one on the settings screen first.', 'woo-stripe-reconcile' ) );
+			}
+			$client = new WSR_Stripe_Client( $api_key );
 		}
 
-		$client       = new WSR_Stripe_Client( $api_key );
 		$window_start = time() - ( self::WINDOW_DAYS * DAY_IN_SECONDS );
 
 		$summary = array(
@@ -115,13 +154,16 @@ class WSR_Reconciler {
 			'stuck_pending_flagged'     => 0,
 			'wrongly_cancelled_flagged' => 0,
 			'no_drift'                  => 0,
+			'stale_drift_auto_resolved' => 0,
 			'pages_fetched'             => 0,
+			'window_truncated'          => false,
 			'errors'                    => array(),
 			'new_alerts'                => array(), // Genuinely new (not re-detected) high/critical drift this run — see WSR_Email_Alerts.
 			'started_at'                => current_time( 'mysql', true ),
 		);
 
-		$order_maps = self::batch_load_order_maps( $window_start );
+		$order_maps           = self::batch_load_order_maps( $window_start );
+		$open_drift_order_ids = self::load_open_drift_order_ids();
 
 		$cursor = null;
 		for ( $page = 0; $page < self::MAX_PAGES; $page++ ) {
@@ -145,13 +187,25 @@ class WSR_Reconciler {
 
 			foreach ( $intents as $pi ) {
 				$summary['payment_intents_scanned']++;
-				self::process_payment_intent( $pi, $order_maps, $client, $summary );
+				self::process_payment_intent( $pi, $order_maps, $open_drift_order_ids, $client, $summary );
 			}
 
 			if ( empty( $page_result['has_more'] ) || empty( $intents ) ) {
 				break;
 			}
 			$cursor = end( $intents )['id'];
+
+			// Bug fix (independent review, round 2): reaching MAX_PAGES
+			// used to exit this loop with no trace at all — for a store
+			// whose 30-day window exceeds the 5,000-PaymentIntent cap,
+			// more than half the window could be silently skipped every
+			// run, with nothing in $summary to show it happened. This is
+			// the last iteration the `for` condition will allow; if
+			// there's still more data (we didn't break above), the cap —
+			// not exhaustion — is why the loop is about to end.
+			if ( $page === self::MAX_PAGES - 1 ) {
+				$summary['window_truncated'] = true;
+			}
 		}
 
 		$summary['finished_at'] = current_time( 'mysql', true );
@@ -172,6 +226,13 @@ class WSR_Reconciler {
 	 * no drift," not misclassified as unresolved just because we didn't
 	 * load that order into the map.
 	 *
+	 * `status => 'all'` specifically (not the default, which is
+	 * wc_get_orders()'s own "any" behavior): confirmed against the
+	 * installed HPOS query source that the default excludes 'trash' (not
+	 * a registered order status), so a trashed-but-actually-paid order
+	 * would otherwise never load into the map and get misclassified as an
+	 * orphaned charge (independent review, round 2).
+	 *
 	 * @param int $window_start Unix timestamp.
 	 * @return array{
 	 *     by_id: array<int, WC_Order>,
@@ -183,6 +244,7 @@ class WSR_Reconciler {
 	private static function batch_load_order_maps( $window_start ) {
 		$orders = wc_get_orders(
 			array(
+				'status'       => 'all',
 				'date_created' => '>=' . $window_start,
 				'limit'        => -1,
 				'return'       => 'objects',
@@ -227,11 +289,28 @@ class WSR_Reconciler {
 	}
 
 	/**
+	 * One query, up front, for every order_id that currently has an open
+	 * drift row — mirrors batch_load_order_maps()'s own "load once, look
+	 * up in memory" design rather than a per-order query to check this.
+	 *
+	 * @return array<int,true> Order IDs as keys, for O(1) isset() lookups.
+	 */
+	private static function load_open_drift_order_ids() {
+		global $wpdb;
+		$table = $wpdb->prefix . 'wsr_drift_log';
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared -- $table is our own constant prefix.
+		$order_ids = $wpdb->get_col( "SELECT DISTINCT order_id FROM {$table} WHERE status = 'open' AND order_id IS NOT NULL" );
+
+		return array_fill_keys( array_map( 'intval', $order_ids ), true );
+	}
+
+	/**
 	 * Resolves one PaymentIntent to a local order (or determines it can't
 	 * be resolved) and runs the state-comparison checks if a match is
 	 * found. All counting/side effects happen here; nothing is returned.
 	 */
-	private static function process_payment_intent( array $pi, array $order_maps, WSR_Stripe_Client $client, array &$summary ) {
+	private static function process_payment_intent( array $pi, array $order_maps, array $open_drift_order_ids, WSR_Stripe_Client $client, array &$summary ) {
 		$pi_id       = isset( $pi['id'] ) ? $pi['id'] : '';
 		$metadata    = isset( $pi['metadata'] ) && is_array( $pi['metadata'] ) ? $pi['metadata'] : array();
 		$order_id    = self::resolve_via_metadata( $metadata, $order_maps );
@@ -291,7 +370,56 @@ class WSR_Reconciler {
 			return;
 		}
 
+		// Bug fix (independent review, round 2): a previously-flagged order
+		// that has since become healthy (fixed manually in wp-admin, or by
+		// a webhook that eventually arrived) was left with a permanently
+		// open, still-actionable Fix row — only woocommerce_payment_complete
+		// closed rows, and Pass A itself never did. This is what makes a
+		// stale row's Fix button dangerous rather than theoretical (it can
+		// sit open indefinitely pointing at outdated data). Scoped to
+		// $open_drift_order_ids (loaded once above) so a healthy store
+		// doesn't pay a query per resolved order — only orders that
+		// actually have an open row reach this UPDATE at all.
+		if ( isset( $open_drift_order_ids[ $order_id ] ) ) {
+			$summary['stale_drift_auto_resolved'] += self::auto_resolve_open_drift_for_order( $order_id );
+		}
+
 		$summary['no_drift']++;
+	}
+
+	/**
+	 * Closes every open drift row for an order — the order is direct
+	 * evidence any previously-flagged drift for it has self-healed.
+	 * Shared between Pass A's own no-drift re-check above and
+	 * WSR_Hook_Listener::on_payment_complete(), which reacts to the same
+	 * "no longer drifting" signal from a webhook instead of the daily
+	 * scan. Only ever touches rows that have order_id set (stuck_pending /
+	 * wrongly_cancelled_paid) — orphaned_charge/needs_review rows have no
+	 * order_id and are structurally excluded by this WHERE clause, which
+	 * is correct: this only ever fires for an order, not a charge with no
+	 * order at all.
+	 *
+	 * @return int Number of rows closed.
+	 */
+	public static function auto_resolve_open_drift_for_order( $order_id ) {
+		global $wpdb;
+		$table = $wpdb->prefix . 'wsr_drift_log';
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- no wpdb abstraction exists for this table.
+		return (int) $wpdb->update(
+			$table,
+			array(
+				'status'      => 'fixed',
+				'resolved_at' => current_time( 'mysql', true ),
+				'resolved_by' => 'system',
+			),
+			array(
+				'order_id' => $order_id,
+				'status'   => 'open',
+			),
+			array( '%s', '%s', '%s' ),
+			array( '%d', '%s' )
+		);
 	}
 
 	/**
@@ -534,10 +662,22 @@ class WSR_Reconciler {
 	 * dispute-handling principle: a permanent exclusion based on a
 	 * point-in-time flag was the exact bug this replaced).
 	 *
-	 * @return string|null 'open' | 'won' | 'lost' | null (no dispute).
+	 * @return string|null 'open' | 'won' | 'lost' | 'unknown' | null (no dispute).
 	 */
 	private static function live_dispute_status( array $pi ) {
 		$dispute = self::expanded_charge_field( $pi, 'dispute' );
+
+		// Bug fix (independent review, round 2): a bare unexpanded dispute
+		// ID (a string, not an array) was previously indistinguishable
+		// from "no dispute at all" — every caller here requests the
+		// expand today, so this isn't currently reachable, but a future
+		// caller that omits it would silently fail *open* on the
+		// highest-severity check class in this project's history. 'unknown'
+		// must never be treated as clean by either caller below.
+		if ( false === $dispute ) {
+			return 'unknown';
+		}
+
 		if ( ! is_array( $dispute ) || empty( $dispute['status'] ) ) {
 			return null;
 		}
@@ -556,22 +696,32 @@ class WSR_Reconciler {
 	}
 
 	/**
-	 * Whether a Radar review is currently open. Stripe clears
-	 * charge.review to null once a review closes (the review object
-	 * itself still exists, retrievable by ID, just no longer linked from
-	 * the charge) — so checking for presence here is self-clearing by
-	 * construction, with no permanence bug to guard against.
+	 * Whether a Radar review is currently open — or unverifiable, which
+	 * must be treated the same way (fail toward "possibly under review",
+	 * not toward "clean"). Stripe clears charge.review to null once a
+	 * review closes (the review object itself still exists, retrievable
+	 * by ID, just no longer linked from the charge), so a genuinely absent
+	 * field is self-clearing by construction and only the unexpanded case
+	 * needs this explicit handling.
 	 */
 	private static function live_review_open( array $pi ) {
-		return is_array( self::expanded_charge_field( $pi, 'review' ) );
+		$review = self::expanded_charge_field( $pi, 'review' );
+		return false === $review || is_array( $review );
 	}
 
+	/**
+	 * @return array|false|null The expanded object, false if the field is
+	 *                          present but unexpanded (a bare ID string —
+	 *                          status genuinely unknown), or null if it's
+	 *                          genuinely absent (no charge, or no dispute/
+	 *                          review at all).
+	 */
 	private static function expanded_charge_field( array $pi, $field ) {
 		$charge = isset( $pi['latest_charge'] ) && is_array( $pi['latest_charge'] ) ? $pi['latest_charge'] : null;
-		if ( null === $charge || ! isset( $charge[ $field ] ) || ! is_array( $charge[ $field ] ) ) {
+		if ( null === $charge || ! isset( $charge[ $field ] ) ) {
 			return null;
 		}
-		return $charge[ $field ];
+		return is_array( $charge[ $field ] ) ? $charge[ $field ] : false;
 	}
 
 	/**
@@ -634,8 +784,9 @@ class WSR_Reconciler {
 			}
 		}
 
-		$severity = 'high';
-		if ( 'open' === self::live_dispute_status( $pi ) || self::live_review_open( $pi ) ) {
+		$severity       = 'high';
+		$dispute_status = self::live_dispute_status( $pi );
+		if ( 'open' === $dispute_status || 'unknown' === $dispute_status || self::live_review_open( $pi ) ) {
 			$severity = 'info';
 		}
 
@@ -652,14 +803,24 @@ class WSR_Reconciler {
 	}
 
 	/**
-	 * Wrongly-cancelled-paid check (FEATURES.md #6): local cancelled, PI
-	 * succeeded, charge captured, not (yet) fully refunded — with a lost
-	 * dispute excluded outright (a legitimate reason for cancelled/failed,
-	 * per the gateway's own logic, not wrongful cancellation) and an open
-	 * dispute downgraded to info rather than excluded.
+	 * Wrongly-cancelled-paid check (FEATURES.md #6): local cancelled OR
+	 * failed, PI succeeded, charge captured, not (yet) fully refunded —
+	 * with a lost dispute excluded outright (a legitimate reason for
+	 * cancelled/failed, per the gateway's own logic, not wrongful
+	 * cancellation) and an open dispute downgraded to info rather than
+	 * excluded.
+	 *
+	 * Bug fix (independent review, round 2): this only ever checked
+	 * 'cancelled', but FEATURES.md:67 documents payment_complete() itself
+	 * as explicitly working from cancelled/pending/on-hold/**failed** —
+	 * 'failed' was always meant to be coverable here (the exclusion
+	 * comment two lines below has said "cancelled/failed" since this
+	 * method was first written), the detection side just never checked
+	 * for it, leaving a paid order sitting in 'failed' as an undetected
+	 * blind spot.
 	 */
 	private static function check_wrongly_cancelled( WC_Order $order, array $pi ) {
-		if ( 'cancelled' !== $order->get_status() ) {
+		if ( ! in_array( $order->get_status(), array( 'cancelled', 'failed' ), true ) ) {
 			return null;
 		}
 		if ( ! isset( $pi['status'] ) || 'succeeded' !== $pi['status'] ) {
@@ -682,7 +843,13 @@ class WSR_Reconciler {
 			return null; // Legitimate: the gateway treats a lost dispute as a real reason for failed/cancelled.
 		}
 
-		$severity = ( 'open' === $dispute_status ) ? 'info' : 'critical';
+		// 'unknown' (unexpanded — see live_dispute_status()) must not be
+		// treated as "no dispute": that would flag this critical/
+		// Fix-actionable when the charge could actually be a legitimately
+		// lost dispute. Downgrading to info, same as a confirmed-open
+		// dispute, keeps it visible without making it actionable on
+		// unverified data.
+		$severity = ( 'open' === $dispute_status || 'unknown' === $dispute_status ) ? 'info' : 'critical';
 
 		return array(
 			'drift_type'    => 'wrongly_cancelled_paid',
@@ -838,10 +1005,13 @@ class WSR_Reconciler {
 			return;
 		}
 
+		// Real risk noted (independent review, round 2): _stripe_setup_intent
+		// holds a SetupIntent ID (seti_...), which lives at Stripe's
+		// separate /v1/setup_intents endpoint, not /v1/payment_intents —
+		// a GET against this endpoint for one always 404s. Harmless, but
+		// a wasted API call every time; only _stripe_intent_id (a real
+		// pi_... PaymentIntent) can ever resolve here.
 		$intent_id = $order->get_meta( '_stripe_intent_id' );
-		if ( ! $intent_id ) {
-			$intent_id = $order->get_meta( '_stripe_setup_intent' );
-		}
 		if ( ! $intent_id ) {
 			return;
 		}

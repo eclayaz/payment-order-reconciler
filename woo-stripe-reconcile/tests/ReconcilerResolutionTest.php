@@ -243,6 +243,7 @@ class ReconcilerResolutionTest extends WSR_TestCase {
 			'stuck_pending_flagged'     => 0,
 			'wrongly_cancelled_flagged' => 0,
 			'no_drift'                  => 0,
+			'stale_drift_auto_resolved' => 0,
 			'new_alerts'                => array(),
 		);
 	}
@@ -260,11 +261,11 @@ class ReconcilerResolutionTest extends WSR_TestCase {
 		return new WSR_Stripe_Client( 'rk_test_unused' );
 	}
 
-	private function process_payment_intent( array $pi, array $order_maps, array &$summary ) {
+	private function process_payment_intent( array $pi, array $order_maps, array &$summary, array $open_drift_order_ids = array() ) {
 		return $this->call_private(
 			WSR_Reconciler::class,
 			'process_payment_intent',
-			array( $pi, $order_maps, $this->harmless_client(), &$summary )
+			array( $pi, $order_maps, $open_drift_order_ids, $this->harmless_client(), &$summary )
 		);
 	}
 
@@ -328,5 +329,119 @@ class ReconcilerResolutionTest extends WSR_TestCase {
 
 		$this->assertSame( 0, $summary['skipped_not_succeeded'] );
 		$this->assertSame( 1, $summary['needs_review'] );
+	}
+
+	// --- process_payment_intent: closing stale open rows on a healthy re-check ---
+	//
+	// Bug (independent review, round 2): when Pass A re-examines a
+	// previously-drifting order that has since become healthy (fixed
+	// manually in wp-admin, or a late webhook), it used to just increment
+	// no_drift and do nothing else — the row stayed open with a live Fix
+	// button indefinitely. Only woocommerce_payment_complete closed rows;
+	// Pass A itself never did.
+
+	public function test_no_drift_resolution_closes_a_stale_open_row_for_that_order() {
+		$order = $this->make_order( 'processing' ); // Healthy now.
+		$id    = $this->insert_drift_row(
+			array(
+				'order_id'   => $order->get_id(),
+				'drift_type' => 'stuck_pending',
+				'severity'   => 'high',
+			)
+		);
+
+		$summary    = $this->full_summary();
+		$order_maps = $this->batch_load_order_maps( time() - DAY_IN_SECONDS );
+		// A healthy 'processing' order matching a succeeded PI triggers
+		// neither check_stuck_pending nor check_wrongly_cancelled — the
+		// no_drift branch under test.
+		$pi = $this->base_pi( array( 'metadata' => array( 'order_key' => $order->get_order_key() ) ) );
+
+		$this->process_payment_intent( $pi, $order_maps, $summary, array( $order->get_id() => true ) );
+
+		$this->assertSame( 1, $summary['no_drift'] );
+		$this->assertSame( 1, $summary['stale_drift_auto_resolved'] );
+
+		$row = $this->drift_log_row_by_id( $id );
+		$this->assertSame( 'fixed', $row->status );
+		$this->assertSame( 'system', $row->resolved_by );
+	}
+
+	public function test_no_drift_resolution_does_not_query_orders_with_no_open_row() {
+		// $open_drift_order_ids intentionally omits this order — the
+		// no_drift branch must not touch (or even query for) it.
+		$order = $this->make_order( 'processing' );
+		$id    = $this->insert_drift_row(
+			array(
+				'order_id'   => $order->get_id(),
+				'drift_type' => 'stuck_pending',
+				'severity'   => 'high',
+				'status'     => 'open',
+			)
+		);
+
+		$summary    = $this->full_summary();
+		$order_maps = $this->batch_load_order_maps( time() - DAY_IN_SECONDS );
+		$pi         = $this->base_pi( array( 'metadata' => array( 'order_key' => $order->get_order_key() ) ) );
+
+		// Empty $open_drift_order_ids — as if this order weren't in the set.
+		$this->process_payment_intent( $pi, $order_maps, $summary, array() );
+
+		$this->assertSame( 0, $summary['stale_drift_auto_resolved'] );
+		$row = $this->drift_log_row_by_id( $id );
+		$this->assertSame( 'open', $row->status, 'Must not touch a row not flagged in $open_drift_order_ids, even if one exists.' );
+	}
+
+	private function drift_log_row_by_id( $id ) {
+		global $wpdb;
+		return $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$wpdb->prefix}wsr_drift_log WHERE id = %d", $id ) );
+	}
+
+	// --- run_pass_a(): silent MAX_PAGES truncation ---
+	//
+	// Bug (independent review, round 2): reaching the pagination cap
+	// exited the loop with nothing in $summary to show it happened — for
+	// a store whose 30-day window exceeds the 5,000-PaymentIntent cap,
+	// more than half the window could be silently skipped every run.
+
+	public function test_run_pass_a_flags_window_truncated_when_the_page_cap_is_hit() {
+		// Always claims more data is available and returns one abandoned-
+		// checkout-shaped PaymentIntent per page (status != succeeded, so
+		// it resolves through the already-covered skipped_not_succeeded
+		// path with no drift-log writes) — enough to drive the loop all
+		// the way to WSR_Reconciler::MAX_PAGES.
+		$client = $this->getMockBuilder( WSR_Stripe_Client::class )
+			->setConstructorArgs( array( 'rk_test_unused' ) )
+			->onlyMethods( array( 'get' ) )
+			->getMock();
+		$client->method( 'get' )->willReturn(
+			array(
+				'data'      => array( $this->base_pi( array( 'id' => 'pi_page_filler', 'status' => 'canceled' ) ) ),
+				'has_more'  => true,
+			)
+		);
+
+		$summary = WSR_Reconciler::run_pass_a( $client );
+
+		$this->assertTrue( $summary['window_truncated'] );
+		$this->assertSame( WSR_Reconciler::MAX_PAGES, $summary['pages_fetched'] );
+	}
+
+	public function test_run_pass_a_does_not_flag_truncation_when_pagination_exhausts_naturally() {
+		$client = $this->getMockBuilder( WSR_Stripe_Client::class )
+			->setConstructorArgs( array( 'rk_test_unused' ) )
+			->onlyMethods( array( 'get' ) )
+			->getMock();
+		$client->method( 'get' )->willReturn(
+			array(
+				'data'     => array( $this->base_pi( array( 'id' => 'pi_only_page', 'status' => 'canceled' ) ) ),
+				'has_more' => false,
+			)
+		);
+
+		$summary = WSR_Reconciler::run_pass_a( $client );
+
+		$this->assertFalse( $summary['window_truncated'] );
+		$this->assertSame( 1, $summary['pages_fetched'] );
 	}
 }

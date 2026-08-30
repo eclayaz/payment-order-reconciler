@@ -88,36 +88,12 @@ class WSR_Hook_Listener {
 			return;
 		}
 
-		self::auto_resolve_open_drift( $order_id );
-	}
-
-	/**
-	 * A legitimately-completing order is direct evidence any previously
-	 * flagged drift for it has self-healed. Only ever touches rows that
-	 * have order_id set (stuck_pending / wrongly_cancelled_paid) —
-	 * orphaned_charge / needs_review rows have no order_id and are
-	 * structurally excluded by this WHERE clause, which is correct: this
-	 * hook fires on an order, not a charge with no order at all.
-	 */
-	private static function auto_resolve_open_drift( $order_id ) {
-		global $wpdb;
-		$table = $wpdb->prefix . 'wsr_drift_log';
-
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- no wpdb abstraction exists for this table.
-		$wpdb->update(
-			$table,
-			array(
-				'status'      => 'fixed',
-				'resolved_at' => current_time( 'mysql', true ),
-				'resolved_by' => 'system',
-			),
-			array(
-				'order_id' => $order_id,
-				'status'   => 'open',
-			),
-			array( '%s', '%s', '%s' ),
-			array( '%d', '%s' )
-		);
+		// A legitimately-completing order is direct evidence any previously
+		// flagged drift for it has self-healed. Shared with Pass A's own
+		// no-drift re-check (WSR_Reconciler::auto_resolve_open_drift_for_order())
+		// — same signal, different trigger (a webhook here, the daily scan
+		// there).
+		WSR_Reconciler::auto_resolve_open_drift_for_order( $order_id );
 	}
 
 	private static function is_dispute_notification( $notification ) {

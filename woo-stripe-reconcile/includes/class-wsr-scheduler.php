@@ -17,9 +17,9 @@ defined( 'ABSPATH' ) || exit;
 
 class WSR_Scheduler {
 
-	const HOOK           = 'wsr_daily_reconciliation';
-	const GROUP          = 'woo-stripe-reconcile';
-	const LOCK_TRANSIENT = 'wsr_run_lock';
+	const HOOK        = 'wsr_daily_reconciliation';
+	const GROUP       = 'woo-stripe-reconcile';
+	const LOCK_OPTION = 'wsr_run_lock';
 
 	/**
 	 * Generous upper bound for one full run (Pass A + Pass B + webhook
@@ -86,15 +86,39 @@ class WSR_Scheduler {
 		}
 	}
 
+	/**
+	 * Bug fix (independent review, round 2): the previous get_transient()
+	 * then set_transient() pair was a real TOCTOU race, not just a
+	 * theoretical one — reproduced with the literal two-worker
+	 * interleaving (get/get/set/set), both proceed. add_option() is a
+	 * genuine INSERT guarded by wp_options' unique option_name index, so
+	 * it's atomic across concurrent requests/processes the way two
+	 * separate get()-then-set() calls never can be.
+	 */
 	private static function try_acquire_lock() {
-		if ( get_transient( self::LOCK_TRANSIENT ) ) {
-			return false;
+		$now = time();
+
+		if ( add_option( self::LOCK_OPTION, $now, '', 'no' ) ) {
+			return true;
 		}
-		set_transient( self::LOCK_TRANSIENT, time(), self::LOCK_TTL );
-		return true;
+
+		// Someone already holds the lock — unless it's stale (a crashed
+		// run that never released it), in which case reclaim it.
+		// update_option() here isn't itself perfectly atomic against
+		// another process reclaiming the same stale lock at the same
+		// instant, but that's a far narrower window than the original
+		// bug: worst case is two runs overlapping during crash recovery,
+		// not on every normal concurrent trigger.
+		$existing = get_option( self::LOCK_OPTION );
+		if ( is_numeric( $existing ) && ( $now - (int) $existing ) > self::LOCK_TTL ) {
+			update_option( self::LOCK_OPTION, $now, 'no' );
+			return true;
+		}
+
+		return false;
 	}
 
 	private static function release_lock() {
-		delete_transient( self::LOCK_TRANSIENT );
+		delete_option( self::LOCK_OPTION );
 	}
 }
