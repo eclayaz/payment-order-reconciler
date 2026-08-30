@@ -95,11 +95,13 @@ class WSR_Settings {
 	}
 
 	/**
-	 * Runs Pass A synchronously on admin demand — the "manual Run now
-	 * button" from TECHNICAL_SPEC.md's build-order step 3, standing in for
-	 * the admin dashboard (step 6) and the ActionScheduler wrapper (step 4)
-	 * that don't exist yet. Stores the run summary in a short-lived,
-	 * per-user transient so it survives the redirect-after-post.
+	 * Runs the full daily job (Pass A + Pass B + webhook health-check)
+	 * synchronously on admin demand — the "manual Run now button" from
+	 * TECHNICAL_SPEC.md's build-order step 3, now going through
+	 * WSR_Scheduler::run_guarded() (added in step 4) so it shares the same
+	 * run-in-progress lock as the scheduled daily job and the two can never
+	 * overlap. Stores the combined result in a short-lived, per-user
+	 * transient so it survives the redirect-after-post.
 	 */
 	public static function handle_run_pass_a() {
 		if ( ! current_user_can( self::CAPABILITY ) ) {
@@ -107,7 +109,7 @@ class WSR_Settings {
 		}
 		check_admin_referer( self::NONCE_ACTION_RUN );
 
-		$result = WSR_Reconciler::run_pass_a();
+		$result = WSR_Scheduler::run_guarded();
 
 		if ( is_wp_error( $result ) ) {
 			set_transient( 'wsr_pass_a_error_' . get_current_user_id(), $result->get_error_message(), 5 * MINUTE_IN_SECONDS );
@@ -252,9 +254,11 @@ class WSR_Settings {
 
 			<?php if ( $current_key ) : ?>
 				<hr />
+				<?php self::render_coverage_status(); ?>
+
 				<h2><?php esc_html_e( 'Manual reconciliation (testing)', 'woo-stripe-reconcile' ); ?></h2>
 				<p class="description">
-					<?php esc_html_e( 'Temporary testing affordance for build-order step 3 — this becomes a proper dashboard with Fix/Dismiss actions in a later step. Runs Pass A once, synchronously, against the last 30 days of PaymentIntents.', 'woo-stripe-reconcile' ); ?>
+					<?php esc_html_e( 'Temporary testing affordance — this becomes a proper dashboard with Fix/Dismiss actions in a later step. Runs the same three steps the daily scheduled job runs: Pass A (reconciliation), Pass B (undelivered-webhook diagnostic), and the webhook endpoint health-check.', 'woo-stripe-reconcile' ); ?>
 				</p>
 				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
 					<?php wp_nonce_field( self::NONCE_ACTION_RUN ); ?>
@@ -270,12 +274,74 @@ class WSR_Settings {
 	}
 
 	/**
-	 * Displays the summary from the most recent manual Pass A run, read
-	 * from the short-lived per-user transient set in handle_run_pass_a().
+	 * Persistent status block, visible on every page load (not just right
+	 * after a manual run) — the forerunner of the "coverage indicator"
+	 * TECHNICAL_SPEC.md calls for as a primary dashboard element in step 6.
+	 * Reads the options run_all() updates on every run, scheduled or manual.
+	 */
+	private static function render_coverage_status() {
+		$last_run_at    = get_option( 'wsr_last_run_at', '' );
+		$pass_b         = get_option( 'wsr_last_pass_b_result', array() );
+		$webhook_health = get_option( 'wsr_last_webhook_health_result', array() );
+
+		echo '<h3>' . esc_html__( 'Coverage', 'woo-stripe-reconcile' ) . '</h3>';
+
+		if ( '' === $last_run_at ) {
+			echo '<p><span style="color:#b32d2e;">&#9679;</span> ' . esc_html__( 'No reconciliation run has completed yet.', 'woo-stripe-reconcile' ) . '</p>';
+		} else {
+			$hours_ago = ( time() - strtotime( $last_run_at . ' UTC' ) ) / HOUR_IN_SECONDS;
+			$color     = $hours_ago < 36 ? '#1a7f37' : '#b32d2e'; // daily job + a margin before flagging as stale.
+			echo '<p><span style="color:' . esc_attr( $color ) . ';">&#9679;</span> ';
+			printf(
+				/* translators: %s: human-readable time difference, e.g. "3 hours" */
+				esc_html__( 'Last run: %s ago.', 'woo-stripe-reconcile' ),
+				esc_html( human_time_diff( strtotime( $last_run_at . ' UTC' ), time() ) )
+			);
+			echo '</p>';
+		}
+
+		if ( isset( $webhook_health['error'] ) ) {
+			echo '<p><span style="color:#b32d2e;">&#9679;</span> ' . esc_html__( 'Webhook health check failed: ', 'woo-stripe-reconcile' ) . esc_html( $webhook_health['error'] ) . '</p>';
+		} elseif ( ! empty( $webhook_health ) ) {
+			if ( ! empty( $webhook_health['no_endpoints_configured'] ) ) {
+				echo '<p><span style="color:#b32d2e;">&#9679;</span> ' . esc_html__( 'No enabled webhook endpoints found in Stripe at all — this store cannot receive any payment notifications.', 'woo-stripe-reconcile' ) . '</p>';
+			} elseif ( empty( $webhook_health['matching_endpoint_found'] ) ) {
+				echo '<p><span style="color:#b32d2e;">&#9679;</span> ' . esc_html__( 'None of the enabled webhook endpoints in Stripe point at this site\'s URL — likely the stale-endpoint problem this plugin exists to catch. Mismatched URLs: ', 'woo-stripe-reconcile' )
+					. esc_html( implode( ', ', $webhook_health['mismatched_endpoint_urls'] ) ) . '</p>';
+			} else {
+				echo '<p><span style="color:#1a7f37;">&#9679;</span> ' . esc_html__( 'A webhook endpoint matching this site was found and is enabled.', 'woo-stripe-reconcile' ) . '</p>';
+			}
+		}
+
+		if ( isset( $pass_b['error'] ) ) {
+			echo '<p><span style="color:#b32d2e;">&#9679;</span> ' . esc_html__( 'Undelivered-events check failed: ', 'woo-stripe-reconcile' ) . esc_html( $pass_b['error'] ) . '</p>';
+		} elseif ( isset( $pass_b['undelivered_count'] ) ) {
+			$color = $pass_b['undelivered_count'] > 0 ? '#b32d2e' : '#1a7f37';
+			echo '<p><span style="color:' . esc_attr( $color ) . ';">&#9679;</span> ';
+			printf(
+				/* translators: %d: number of events that failed webhook delivery in the last 30 days */
+				esc_html__( '%d event(s) failed webhook delivery in the last 30 days.', 'woo-stripe-reconcile' ),
+				(int) $pass_b['undelivered_count']
+			);
+			echo '</p>';
+		}
+	}
+
+	/**
+	 * Displays the summary from the most recent manual run, read from the
+	 * short-lived per-user transient set in handle_run_pass_a() — now the
+	 * combined {pass_a, pass_b, webhook_health} shape run_all() returns,
+	 * not Pass A alone.
 	 */
 	private static function render_pass_a_result() {
 		$result = get_transient( 'wsr_pass_a_result_' . get_current_user_id() );
-		if ( ! is_array( $result ) ) {
+		if ( ! is_array( $result ) || ! isset( $result['pass_a'] ) ) {
+			return;
+		}
+
+		$pass_a = $result['pass_a'];
+		if ( is_wp_error( $pass_a ) ) {
+			echo '<div class="notice notice-error inline"><p>' . esc_html__( 'Pass A failed: ', 'woo-stripe-reconcile' ) . esc_html( $pass_a->get_error_message() ) . '</p></div>';
 			return;
 		}
 
@@ -292,18 +358,18 @@ class WSR_Settings {
 			'pages_fetched'             => __( 'API pages fetched', 'woo-stripe-reconcile' ),
 		);
 
-		echo '<h3>' . esc_html__( 'Last run results', 'woo-stripe-reconcile' ) . '</h3>';
+		echo '<h3>' . esc_html__( 'Last run results — Pass A', 'woo-stripe-reconcile' ) . '</h3>';
 		echo '<table class="widefat" style="max-width: 480px;"><tbody>';
 		foreach ( $labels as $key => $label ) {
-			if ( ! isset( $result[ $key ] ) ) {
+			if ( ! isset( $pass_a[ $key ] ) ) {
 				continue;
 			}
-			echo '<tr><td>' . esc_html( $label ) . '</td><td><strong>' . esc_html( $result[ $key ] ) . '</strong></td></tr>';
+			echo '<tr><td>' . esc_html( $label ) . '</td><td><strong>' . esc_html( $pass_a[ $key ] ) . '</strong></td></tr>';
 		}
 		echo '</tbody></table>';
 
-		if ( ! empty( $result['errors'] ) ) {
-			echo '<div class="notice notice-error inline"><p>' . esc_html( implode( '; ', $result['errors'] ) ) . '</p></div>';
+		if ( ! empty( $pass_a['errors'] ) ) {
+			echo '<div class="notice notice-error inline"><p>' . esc_html( implode( '; ', $pass_a['errors'] ) ) . '</p></div>';
 		}
 	}
 

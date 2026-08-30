@@ -36,9 +36,53 @@ class WSR_Reconciler {
 	const MAX_PAGES = 50; // 50 * 100 = 5,000 PaymentIntents per run.
 
 	/**
-	 * Runs Pass A once, synchronously. Called directly by the manual
-	 * "Run now" button in this build-order step; wrapped in an
-	 * ActionScheduler job in a later step.
+	 * Event types Pass B checks for undelivered-webhook status. Kept well
+	 * under Stripe's documented 20-type limit on the `types` list param.
+	 * This is a diagnostic, not a drift-detection input (see class comment
+	 * on run_pass_b()) — the set only needs to be broad enough to notice
+	 * "this store's webhook endpoint is currently failing," not to cover
+	 * every event type Pass A's own PaymentIntent-based checks care about.
+	 */
+	const PASS_B_EVENT_TYPES = array(
+		'payment_intent.succeeded',
+		'payment_intent.payment_failed',
+		'payment_intent.canceled',
+		'charge.refunded',
+		'charge.dispute.created',
+		'checkout.session.completed',
+	);
+
+	/**
+	 * Runs all three steps of the single daily job (TECHNICAL_SPEC.md
+	 * "Scheduled reconciliation — one daily job, three steps") and records
+	 * Pass B / webhook-health results as options for the settings screen
+	 * (and, later, the real dashboard in build-order step 6) to display.
+	 * Called by both the ActionScheduler callback and the manual "Run now"
+	 * button — WSR_Scheduler is responsible for the run-in-progress guard
+	 * around this, not this method itself.
+	 *
+	 * @return array{pass_a: array|WP_Error, pass_b: array|WP_Error, webhook_health: array|WP_Error}
+	 */
+	public static function run_all() {
+		$pass_a         = self::run_pass_a();
+		$pass_b         = self::run_pass_b();
+		$webhook_health = self::run_webhook_health_check();
+
+		update_option( 'wsr_last_pass_b_result', is_wp_error( $pass_b ) ? array( 'error' => $pass_b->get_error_message() ) : $pass_b, false );
+		update_option( 'wsr_last_webhook_health_result', is_wp_error( $webhook_health ) ? array( 'error' => $webhook_health->get_error_message() ) : $webhook_health, false );
+		update_option( 'wsr_last_run_at', current_time( 'mysql', true ), false );
+
+		return array(
+			'pass_a'         => $pass_a,
+			'pass_b'         => $pass_b,
+			'webhook_health' => $webhook_health,
+		);
+	}
+
+	/**
+	 * Pass A. Runs Pass A once, synchronously. Called directly by the manual
+	 * "Run now" button in the prior build-order step; now also wrapped by
+	 * run_all() for the scheduled daily job.
 	 *
 	 * @return array|WP_Error Summary counts on success, WP_Error if the
 	 *                         Stripe API key isn't usable at all.
@@ -557,5 +601,99 @@ class WSR_Reconciler {
 		);
 
 		return $outcome;
+	}
+
+	/**
+	 * Pass B: lists Stripe events that failed delivery to at least one
+	 * webhook endpoint. Diagnostic only — never writes to wsr_drift_log.
+	 *
+	 * Per TECHNICAL_SPEC.md: this cannot be the orphaned-charge detection
+	 * mechanism (that's Pass A's job) because a webhook the gateway
+	 * couldn't map to an order still gets acked 200 — delivery succeeded,
+	 * so `delivery_success=false` returns nothing for that case. What this
+	 * *can* tell a merchant is narrower and still valuable: "your webhook
+	 * endpoint is currently failing to receive events," independent of
+	 * whether any specific order has drifted yet.
+	 *
+	 * @return array|WP_Error
+	 */
+	public static function run_pass_b() {
+		$api_key = WSR_Settings::get_api_key();
+		if ( '' === $api_key ) {
+			return new WP_Error( 'wsr_no_api_key', __( 'No Stripe API key is configured.', 'woo-stripe-reconcile' ) );
+		}
+
+		$client       = new WSR_Stripe_Client( $api_key );
+		$window_start = time() - ( self::WINDOW_DAYS * DAY_IN_SECONDS );
+
+		$result = $client->get(
+			'events',
+			array(
+				'created'          => array( 'gte' => $window_start ),
+				'delivery_success' => false,
+				'types'            => self::PASS_B_EVENT_TYPES,
+				'limit'            => 100,
+			)
+		);
+
+		if ( is_wp_error( $result ) ) {
+			return $result;
+		}
+
+		$events = isset( $result['data'] ) && is_array( $result['data'] ) ? $result['data'] : array();
+
+		return array(
+			'undelivered_count' => count( $events ),
+			'sample_event_ids'  => array_slice( wp_list_pluck( $events, 'id' ), 0, 10 ),
+			'checked_at'        => current_time( 'mysql', true ),
+		);
+	}
+
+	/**
+	 * Webhook health-check (FEATURES.md #11): compares each enabled
+	 * webhook endpoint's URL against this site's own host. Directly
+	 * targets the stale-staging-domain root cause documented in
+	 * PROBLEM.md's best piece of evidence — a merchant whose endpoint
+	 * points at an old domain would never be told so otherwise.
+	 *
+	 * @return array|WP_Error
+	 */
+	public static function run_webhook_health_check() {
+		$api_key = WSR_Settings::get_api_key();
+		if ( '' === $api_key ) {
+			return new WP_Error( 'wsr_no_api_key', __( 'No Stripe API key is configured.', 'woo-stripe-reconcile' ) );
+		}
+
+		$client = new WSR_Stripe_Client( $api_key );
+		$result = $client->get( 'webhook_endpoints', array( 'limit' => 100 ) );
+
+		if ( is_wp_error( $result ) ) {
+			return $result;
+		}
+
+		$endpoints = isset( $result['data'] ) && is_array( $result['data'] ) ? $result['data'] : array();
+		$site_host = self::normalize_host( home_url() );
+
+		$matching   = array();
+		$mismatched = array();
+
+		foreach ( $endpoints as $endpoint ) {
+			if ( empty( $endpoint['url'] ) || 'enabled' !== ( $endpoint['status'] ?? '' ) ) {
+				continue; // A disabled endpoint isn't a live misconfiguration to flag.
+			}
+			if ( self::normalize_host( $endpoint['url'] ) === $site_host ) {
+				$matching[] = $endpoint['url'];
+			} else {
+				$mismatched[] = $endpoint['url'];
+			}
+		}
+
+		return array(
+			'endpoints_checked'        => count( $endpoints ),
+			'matching_endpoint_found'  => ! empty( $matching ),
+			'mismatched_endpoint_urls' => $mismatched,
+			'no_endpoints_configured'  => empty( $endpoints ),
+			'checked_at'               => current_time( 'mysql', true ),
+		);
 	}
 }

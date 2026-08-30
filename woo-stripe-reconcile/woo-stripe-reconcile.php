@@ -121,12 +121,14 @@ function wsr_init() {
 	// function runs this request).
 	require_once WSR_PLUGIN_DIR . 'includes/class-wsr-stripe-client.php';
 	require_once WSR_PLUGIN_DIR . 'includes/class-wsr-reconciler.php';
+	require_once WSR_PLUGIN_DIR . 'includes/class-wsr-scheduler.php';
 	require_once WSR_PLUGIN_DIR . 'includes/class-wsr-settings.php';
 	WSR_Settings::init();
+	WSR_Scheduler::init();
 
 	// Later build-order steps will require_once their classes here:
 	// class-wsr-event-ledger.php, class-wsr-hook-listener.php,
-	// class-wsr-scheduler.php, class-wsr-fixer.php, class-wsr-audit-log.php,
+	// class-wsr-fixer.php, class-wsr-audit-log.php,
 	// class-wsr-admin-dashboard.php.
 }
 
