@@ -72,6 +72,10 @@ class WSR_Reconciler {
 		update_option( 'wsr_last_webhook_health_result', is_wp_error( $webhook_health ) ? array( 'error' => $webhook_health->get_error_message() ) : $webhook_health, false );
 		update_option( 'wsr_last_run_at', current_time( 'mysql', true ), false );
 
+		if ( ! is_wp_error( $pass_a ) && ! empty( $pass_a['new_alerts'] ) && class_exists( 'WSR_Email_Alerts' ) ) {
+			WSR_Email_Alerts::maybe_send( $pass_a['new_alerts'] );
+		}
+
 		return array(
 			'pass_a'         => $pass_a,
 			'pass_b'         => $pass_b,
@@ -108,6 +112,7 @@ class WSR_Reconciler {
 			'no_drift'                  => 0,
 			'pages_fetched'             => 0,
 			'errors'                    => array(),
+			'new_alerts'                => array(), // Genuinely new (not re-detected) high/critical drift this run — see WSR_Email_Alerts.
 			'started_at'                => current_time( 'mysql', true ),
 		);
 
@@ -254,14 +259,14 @@ class WSR_Reconciler {
 
 		$stuck_pending_drift = self::check_stuck_pending( $order, $pi );
 		if ( null !== $stuck_pending_drift ) {
-			self::upsert_drift( $order_id, $pi_id, $stuck_pending_drift );
+			self::upsert_drift_and_maybe_alert( $order_id, $pi_id, $stuck_pending_drift, $summary );
 			$summary['stuck_pending_flagged']++;
 			return;
 		}
 
 		$wrongly_cancelled_drift = self::check_wrongly_cancelled( $order, $pi );
 		if ( null !== $wrongly_cancelled_drift ) {
-			self::upsert_drift( $order_id, $pi_id, $wrongly_cancelled_drift );
+			self::upsert_drift_and_maybe_alert( $order_id, $pi_id, $wrongly_cancelled_drift, $summary );
 			$summary['wrongly_cancelled_flagged']++;
 			return;
 		}
@@ -509,6 +514,30 @@ class WSR_Reconciler {
 	}
 
 	/**
+	 * Thin wrapper around upsert_drift() used by the two order-resolved
+	 * checks specifically (stuck_pending / wrongly_cancelled_paid) — adds
+	 * a genuinely-new, high/critical-severity drift to the run's
+	 * new_alerts list for WSR_Email_Alerts, without changing upsert_drift()
+	 * itself (which handle_unresolved()'s needs_review path also calls,
+	 * and needs_review is never email-alert-worthy on its own — only once
+	 * it escalates to orphaned_charge would it matter, and that's a
+	 * separate, deliberately not-yet-built notification path since
+	 * orphaned-charge alerts need different handling — no order to link to
+	 * in the email).
+	 */
+	private static function upsert_drift_and_maybe_alert( $order_id, $stripe_object_id, array $drift, array &$summary ) {
+		$outcome = self::upsert_drift( $order_id, $stripe_object_id, $drift );
+		if ( 'inserted' === $outcome && in_array( $drift['severity'], array( 'high', 'critical' ), true ) ) {
+			$summary['new_alerts'][] = array(
+				'order_id'         => $order_id,
+				'drift_type'       => $drift['drift_type'],
+				'severity'         => $drift['severity'],
+				'stripe_object_id' => $stripe_object_id,
+			);
+		}
+	}
+
+	/**
 	 * Inserts a new drift row, or — on an open_key collision — updates the
 	 * existing one: bumps detection_count, refreshes the detected_at/
 	 * severity/status snapshot, and (for needs_review specifically)
@@ -601,6 +630,58 @@ class WSR_Reconciler {
 		);
 
 		return $outcome;
+	}
+
+	/**
+	 * Verifies one order directly against Stripe — the target of the
+	 * hook-listener accelerators (WSR_Hook_Listener), which schedule this
+	 * a couple of minutes after a webhook-processing error or a
+	 * charge-processed signal, rather than waiting for tomorrow's full
+	 * daily pass. Reuses the same state-comparison checks and upsert
+	 * mechanism as Pass A — this is Pass A's logic scoped to a single
+	 * PaymentIntent instead of the whole 30-day window.
+	 *
+	 * Deliberately does nothing (no drift written, no error surfaced) if
+	 * the order has no known Stripe intent ID or the API call fails —
+	 * this is an acceleration convenience on top of the daily job, which
+	 * will pick up any real drift regardless.
+	 */
+	public static function verify_single_order( $order_id ) {
+		$order = wc_get_order( $order_id );
+		if ( ! $order instanceof WC_Order ) {
+			return;
+		}
+
+		$intent_id = $order->get_meta( '_stripe_intent_id' );
+		if ( ! $intent_id ) {
+			$intent_id = $order->get_meta( '_stripe_setup_intent' );
+		}
+		if ( ! $intent_id ) {
+			return;
+		}
+
+		$api_key = WSR_Settings::get_api_key();
+		if ( '' === $api_key ) {
+			return;
+		}
+
+		$client = new WSR_Stripe_Client( $api_key );
+		$pi     = $client->get(
+			'payment_intents/' . $intent_id,
+			array( 'expand' => array( 'latest_charge', 'latest_charge.dispute', 'latest_charge.review' ) )
+		);
+
+		if ( is_wp_error( $pi ) || ! is_array( $pi ) ) {
+			return;
+		}
+
+		$drift = self::check_stuck_pending( $order, $pi );
+		if ( null === $drift ) {
+			$drift = self::check_wrongly_cancelled( $order, $pi );
+		}
+		if ( null !== $drift ) {
+			self::upsert_drift( $order_id, $intent_id, $drift );
+		}
 	}
 
 	/**

@@ -17,10 +17,34 @@ class WSR_Settings {
 	const NONCE_ACTION_RUN     = 'wsr_run_pass_a';
 	const CAPABILITY           = 'manage_woocommerce';
 
+	const NONCE_ACTION_ALERT_EMAIL = 'wsr_save_alert_email';
+
 	public static function init() {
 		add_action( 'admin_menu', array( __CLASS__, 'register_menu' ) );
 		add_action( 'admin_post_wsr_save_settings', array( __CLASS__, 'handle_save' ) );
 		add_action( 'admin_post_wsr_run_pass_a', array( __CLASS__, 'handle_run_pass_a' ) );
+		add_action( 'admin_post_wsr_save_alert_email', array( __CLASS__, 'handle_save_alert_email' ) );
+	}
+
+	/**
+	 * Kept as its own form/action, deliberately separate from handle_save()
+	 * above — that form's API-key field treats "submitted blank" as "clear
+	 * the key" (its own placeholder only ever shows a masked preview, never
+	 * the real value). Combining an alert-email field into the same form
+	 * would mean saving just the email while leaving the key field blank
+	 * silently wipes the configured key. Two small forms avoids that trap.
+	 */
+	public static function handle_save_alert_email() {
+		if ( ! current_user_can( self::CAPABILITY ) ) {
+			wp_die( esc_html__( 'You do not have permission to do this.', 'woo-stripe-reconcile' ) );
+		}
+		check_admin_referer( self::NONCE_ACTION_ALERT_EMAIL );
+
+		$email = isset( $_POST['wsr_alert_email'] ) ? sanitize_email( wp_unslash( $_POST['wsr_alert_email'] ) ) : '';
+		update_option( WSR_Email_Alerts::OPTION_ALERT_EMAIL, $email, false );
+
+		wp_safe_redirect( add_query_arg( 'wsr_notice', 'alert_email_saved', wp_get_referer() ) );
+		exit;
 	}
 
 	public static function register_menu() {
@@ -254,6 +278,25 @@ class WSR_Settings {
 
 			<?php if ( $current_key ) : ?>
 				<hr />
+				<h2><?php esc_html_e( 'Alerts', 'woo-stripe-reconcile' ); ?></h2>
+				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+					<?php wp_nonce_field( self::NONCE_ACTION_ALERT_EMAIL ); ?>
+					<input type="hidden" name="action" value="wsr_save_alert_email" />
+					<table class="form-table">
+						<tr>
+							<th scope="row"><label for="wsr_alert_email"><?php esc_html_e( 'Alert email', 'woo-stripe-reconcile' ); ?></label></th>
+							<td>
+								<input type="email" id="wsr_alert_email" name="wsr_alert_email" class="regular-text"
+									value="<?php echo esc_attr( get_option( WSR_Email_Alerts::OPTION_ALERT_EMAIL, '' ) ); ?>"
+									placeholder="<?php echo esc_attr( get_option( 'admin_email' ) ); ?>" />
+								<p class="description"><?php esc_html_e( 'Sent one email per run when new high/critical-severity drift is found. Leave blank to use the site admin email.', 'woo-stripe-reconcile' ); ?></p>
+							</td>
+						</tr>
+					</table>
+					<?php submit_button( __( 'Save', 'woo-stripe-reconcile' ), 'secondary' ); ?>
+				</form>
+
+				<hr />
 				<?php self::render_coverage_status(); ?>
 
 				<h2><?php esc_html_e( 'Manual reconciliation (testing)', 'woo-stripe-reconcile' ); ?></h2>
@@ -426,6 +469,7 @@ class WSR_Settings {
 			'constant_locked'    => array( 'error', __( 'The API key is locked via wp-config.php and cannot be changed from this screen.', 'woo-stripe-reconcile' ) ),
 			'pass_a_ran'         => array( 'success', __( 'Reconciliation run complete. See results below.', 'woo-stripe-reconcile' ) ),
 			'pass_a_error'       => array( 'error', self::get_pass_a_error_message() ),
+			'alert_email_saved' => array( 'success', __( 'Alert email saved.', 'woo-stripe-reconcile' ) ),
 		);
 
 		if ( isset( $messages[ $notice ] ) ) {
