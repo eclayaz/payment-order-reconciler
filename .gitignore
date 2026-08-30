@@ -4,3 +4,4 @@ vendor/
 *.log
 .idea/
 .vscode/
+.phpunit.result.cache

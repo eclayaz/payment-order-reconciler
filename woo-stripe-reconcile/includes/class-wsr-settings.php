@@ -77,6 +77,14 @@ class WSR_Settings {
 		return defined( self::KEY_CONSTANT ) && '' !== constant( self::KEY_CONSTANT );
 	}
 
+	/**
+	 * Extracted as its own testable predicate — handle_save() itself
+	 * can't be unit tested directly since it always ends in wp_die()/exit.
+	 */
+	public static function is_restricted_key_format( $key ) {
+		return (bool) preg_match( '/^rk_(live|test)_/', (string) $key );
+	}
+
 	public static function handle_save() {
 		if ( ! current_user_can( self::CAPABILITY ) ) {
 			wp_die( esc_html__( 'You do not have permission to do this.', 'woo-stripe-reconcile' ) );
@@ -103,7 +111,7 @@ class WSR_Settings {
 		// anything that isn't a restricted key. A regular secret key
 		// (sk_live_/sk_test_) has full write access, which this plugin must
 		// never hold even if a merchant pastes one in by mistake.
-		if ( ! preg_match( '/^rk_(live|test)_/', $submitted_key ) ) {
+		if ( ! self::is_restricted_key_format( $submitted_key ) ) {
 			wp_safe_redirect( add_query_arg( 'wsr_notice', 'not_restricted_key', wp_get_referer() ) );
 			exit;
 		}

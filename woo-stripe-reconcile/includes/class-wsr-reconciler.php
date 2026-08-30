@@ -446,12 +446,22 @@ class WSR_Reconciler {
 		}
 
 		$awaiting_action = $order->get_meta( '_stripe_payment_awaiting_action' );
-		$date_modified   = $order->get_date_modified();
-		if ( $awaiting_action && $date_modified && $date_modified->getTimestamp() > ( time() - DAY_IN_SECONDS ) ) {
-			// Legitimately mid-3DS/SCA within the gateway's own 24h
-			// window — not drift. Mirrors the gateway's own time-bound
-			// treatment of this meta (see FEATURES.md #7).
-			return null;
+		if ( $awaiting_action ) {
+			// A brand-new order can have a NULL date_modified (confirmed
+			// via testing — WooCommerce doesn't always stamp it at
+			// creation) even though it's the most "recent" state possible.
+			// Falling back to date_created for that case matters: without
+			// it, a genuinely fresh mid-3DS order with a null
+			// date_modified would fail this truthiness check and lose its
+			// exclusion protection entirely, the opposite of the intended
+			// behavior.
+			$reference_date = $order->get_date_modified() ?: $order->get_date_created();
+			if ( $reference_date && $reference_date->getTimestamp() > ( time() - DAY_IN_SECONDS ) ) {
+				// Legitimately mid-3DS/SCA within the gateway's own 24h
+				// window — not drift. Mirrors the gateway's own time-bound
+				// treatment of this meta (see FEATURES.md #7).
+				return null;
+			}
 		}
 
 		$severity = 'high';
