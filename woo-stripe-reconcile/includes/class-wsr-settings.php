@@ -14,11 +14,13 @@ class WSR_Settings {
 	const OPTION_SCOPE_STATUS  = 'wsr_stripe_scope_status'; // Map of scope => true|error string. Never the key itself.
 	const KEY_CONSTANT         = 'WSR_STRIPE_RESTRICTED_KEY';
 	const NONCE_ACTION         = 'wsr_save_settings';
+	const NONCE_ACTION_RUN     = 'wsr_run_pass_a';
 	const CAPABILITY           = 'manage_woocommerce';
 
 	public static function init() {
 		add_action( 'admin_menu', array( __CLASS__, 'register_menu' ) );
 		add_action( 'admin_post_wsr_save_settings', array( __CLASS__, 'handle_save' ) );
+		add_action( 'admin_post_wsr_run_pass_a', array( __CLASS__, 'handle_run_pass_a' ) );
 	}
 
 	public static function register_menu() {
@@ -89,6 +91,32 @@ class WSR_Settings {
 		update_option( self::OPTION_SCOPE_STATUS, $results, false );
 
 		wp_safe_redirect( add_query_arg( 'wsr_notice', 'saved', wp_get_referer() ) );
+		exit;
+	}
+
+	/**
+	 * Runs Pass A synchronously on admin demand — the "manual Run now
+	 * button" from TECHNICAL_SPEC.md's build-order step 3, standing in for
+	 * the admin dashboard (step 6) and the ActionScheduler wrapper (step 4)
+	 * that don't exist yet. Stores the run summary in a short-lived,
+	 * per-user transient so it survives the redirect-after-post.
+	 */
+	public static function handle_run_pass_a() {
+		if ( ! current_user_can( self::CAPABILITY ) ) {
+			wp_die( esc_html__( 'You do not have permission to do this.', 'woo-stripe-reconcile' ) );
+		}
+		check_admin_referer( self::NONCE_ACTION_RUN );
+
+		$result = WSR_Reconciler::run_pass_a();
+
+		if ( is_wp_error( $result ) ) {
+			set_transient( 'wsr_pass_a_error_' . get_current_user_id(), $result->get_error_message(), 5 * MINUTE_IN_SECONDS );
+			wp_safe_redirect( add_query_arg( 'wsr_notice', 'pass_a_error', wp_get_referer() ) );
+			exit;
+		}
+
+		set_transient( 'wsr_pass_a_result_' . get_current_user_id(), $result, 5 * MINUTE_IN_SECONDS );
+		wp_safe_redirect( add_query_arg( 'wsr_notice', 'pass_a_ran', wp_get_referer() ) );
 		exit;
 	}
 
@@ -221,8 +249,104 @@ class WSR_Settings {
 					<?php esc_html_e( 'If any scope failed, edit the restricted key in your Stripe Dashboard (Developers → API keys) to add the missing permission, then save again here.', 'woo-stripe-reconcile' ); ?>
 				</p>
 			<?php endif; ?>
+
+			<?php if ( $current_key ) : ?>
+				<hr />
+				<h2><?php esc_html_e( 'Manual reconciliation (testing)', 'woo-stripe-reconcile' ); ?></h2>
+				<p class="description">
+					<?php esc_html_e( 'Temporary testing affordance for build-order step 3 — this becomes a proper dashboard with Fix/Dismiss actions in a later step. Runs Pass A once, synchronously, against the last 30 days of PaymentIntents.', 'woo-stripe-reconcile' ); ?>
+				</p>
+				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+					<?php wp_nonce_field( self::NONCE_ACTION_RUN ); ?>
+					<input type="hidden" name="action" value="wsr_run_pass_a" />
+					<?php submit_button( __( 'Run reconciliation now', 'woo-stripe-reconcile' ), 'secondary' ); ?>
+				</form>
+
+				<?php self::render_pass_a_result(); ?>
+				<?php self::render_drift_log_preview(); ?>
+			<?php endif; ?>
 		</div>
 		<?php
+	}
+
+	/**
+	 * Displays the summary from the most recent manual Pass A run, read
+	 * from the short-lived per-user transient set in handle_run_pass_a().
+	 */
+	private static function render_pass_a_result() {
+		$result = get_transient( 'wsr_pass_a_result_' . get_current_user_id() );
+		if ( ! is_array( $result ) ) {
+			return;
+		}
+
+		$labels = array(
+			'payment_intents_scanned'   => __( 'PaymentIntents scanned', 'woo-stripe-reconcile' ),
+			'resolved_to_order'         => __( 'Resolved to a local order', 'woo-stripe-reconcile' ),
+			'no_drift'                  => __( 'Resolved, no drift found', 'woo-stripe-reconcile' ),
+			'stuck_pending_flagged'     => __( 'Stuck-pending flagged', 'woo-stripe-reconcile' ),
+			'wrongly_cancelled_flagged' => __( 'Wrongly-cancelled-paid flagged', 'woo-stripe-reconcile' ),
+			'needs_review'              => __( 'Needs review (unresolved)', 'woo-stripe-reconcile' ),
+			'orphaned_charge_escalated' => __( 'Escalated to orphaned charge', 'woo-stripe-reconcile' ),
+			'skipped_other_site'        => __( 'Skipped (belongs to another site)', 'woo-stripe-reconcile' ),
+			'skipped_too_fresh'         => __( 'Skipped (too fresh, revisit next run)', 'woo-stripe-reconcile' ),
+			'pages_fetched'             => __( 'API pages fetched', 'woo-stripe-reconcile' ),
+		);
+
+		echo '<h3>' . esc_html__( 'Last run results', 'woo-stripe-reconcile' ) . '</h3>';
+		echo '<table class="widefat" style="max-width: 480px;"><tbody>';
+		foreach ( $labels as $key => $label ) {
+			if ( ! isset( $result[ $key ] ) ) {
+				continue;
+			}
+			echo '<tr><td>' . esc_html( $label ) . '</td><td><strong>' . esc_html( $result[ $key ] ) . '</strong></td></tr>';
+		}
+		echo '</tbody></table>';
+
+		if ( ! empty( $result['errors'] ) ) {
+			echo '<div class="notice notice-error inline"><p>' . esc_html( implode( '; ', $result['errors'] ) ) . '</p></div>';
+		}
+	}
+
+	/**
+	 * Raw preview of the most recent drift_log rows — a stand-in for the
+	 * real admin dashboard (TECHNICAL_SPEC.md build-order step 6), just
+	 * enough to see what Pass A actually wrote during manual testing.
+	 */
+	private static function render_drift_log_preview() {
+		global $wpdb;
+		$table = $wpdb->prefix . 'wsr_drift_log';
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared -- $table is our own constant prefix; read-only preview, no user input.
+		$rows = $wpdb->get_results( "SELECT * FROM {$table} ORDER BY detected_at DESC LIMIT 50" );
+
+		if ( empty( $rows ) ) {
+			echo '<p>' . esc_html__( 'No drift recorded yet.', 'woo-stripe-reconcile' ) . '</p>';
+			return;
+		}
+
+		echo '<h3>' . esc_html__( 'Drift log (most recent 50)', 'woo-stripe-reconcile' ) . '</h3>';
+		echo '<table class="widefat"><thead><tr>
+			<th>' . esc_html__( 'Order', 'woo-stripe-reconcile' ) . '</th>
+			<th>' . esc_html__( 'Stripe object', 'woo-stripe-reconcile' ) . '</th>
+			<th>' . esc_html__( 'Type', 'woo-stripe-reconcile' ) . '</th>
+			<th>' . esc_html__( 'Severity', 'woo-stripe-reconcile' ) . '</th>
+			<th>' . esc_html__( 'Status', 'woo-stripe-reconcile' ) . '</th>
+			<th>' . esc_html__( 'Local → Stripe', 'woo-stripe-reconcile' ) . '</th>
+			<th>' . esc_html__( 'Seen', 'woo-stripe-reconcile' ) . '</th>
+		</tr></thead><tbody>';
+
+		foreach ( $rows as $row ) {
+			echo '<tr>';
+			echo '<td>' . ( $row->order_id ? esc_html( '#' . $row->order_id ) : '—' ) . '</td>';
+			echo '<td><code>' . esc_html( $row->stripe_object_id ) . '</code></td>';
+			echo '<td>' . esc_html( $row->drift_type ) . '</td>';
+			echo '<td>' . esc_html( $row->severity ) . '</td>';
+			echo '<td>' . esc_html( $row->status ) . '</td>';
+			echo '<td>' . esc_html( $row->local_status_at_detection . ' → ' . $row->stripe_status_at_detection ) . '</td>';
+			echo '<td>' . esc_html( $row->detected_at ) . ' (&times;' . (int) $row->detection_count . ')</td>';
+			echo '</tr>';
+		}
+		echo '</tbody></table>';
 	}
 
 	private static function render_notice( $notice ) {
@@ -234,11 +358,22 @@ class WSR_Settings {
 				__( 'That doesn\'t look like a restricted key (should start with rk_live_ or rk_test_). A regular secret key (sk_...) has full write access and is not supported by this plugin — create a restricted, read-only key instead.', 'woo-stripe-reconcile' ),
 			),
 			'constant_locked'    => array( 'error', __( 'The API key is locked via wp-config.php and cannot be changed from this screen.', 'woo-stripe-reconcile' ) ),
+			'pass_a_ran'         => array( 'success', __( 'Reconciliation run complete. See results below.', 'woo-stripe-reconcile' ) ),
+			'pass_a_error'       => array( 'error', self::get_pass_a_error_message() ),
 		);
 
 		if ( isset( $messages[ $notice ] ) ) {
 			list( $type, $text ) = $messages[ $notice ];
 			printf( '<div class="notice notice-%1$s is-dismissible"><p>%2$s</p></div>', esc_attr( $type ), esc_html( $text ) );
 		}
+	}
+
+	private static function get_pass_a_error_message() {
+		$message = get_transient( 'wsr_pass_a_error_' . get_current_user_id() );
+		return $message ? sprintf(
+			/* translators: %s: the underlying error message */
+			__( 'Reconciliation run failed: %s', 'woo-stripe-reconcile' ),
+			$message
+		) : __( 'Reconciliation run failed.', 'woo-stripe-reconcile' );
 	}
 }

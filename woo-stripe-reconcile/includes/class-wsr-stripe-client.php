@@ -32,7 +32,7 @@ class WSR_Stripe_Client {
 	 * GET request against the Stripe API.
 	 *
 	 * @param string $path  Path relative to API_BASE, e.g. 'payment_intents' or 'checkout/sessions'.
-	 * @param array  $query Query args, Stripe-formatted (e.g. 'limit', 'type').
+	 * @param array  $query Query args, Stripe-formatted (e.g. 'limit', 'created' => array('gte' => ...), 'expand' => array(...)).
 	 * @return array|WP_Error Decoded JSON body on 2xx, WP_Error otherwise.
 	 */
 	public function get( $path, array $query = array() ) {
@@ -42,7 +42,11 @@ class WSR_Stripe_Client {
 
 		$url = self::API_BASE . ltrim( $path, '/' );
 		if ( ! empty( $query ) ) {
-			$url = add_query_arg( $query, $url );
+			$pairs = array();
+			self::flatten_params( $query, '', $pairs );
+			if ( ! empty( $pairs ) ) {
+				$url .= '?' . implode( '&', $pairs );
+			}
 		}
 
 		$response = wp_remote_get(
@@ -86,6 +90,41 @@ class WSR_Stripe_Client {
 		}
 
 		return $body;
+	}
+
+	/**
+	 * Serializes nested query params into Stripe's exact bracket notation
+	 * (`created[gte]=...`, `expand[]=...&expand[]=...`).
+	 *
+	 * WordPress's own add_query_arg()/build_query() produce PHP's default
+	 * *indexed* bracket style for array values (`expand[0]=...&expand[1]=...`)
+	 * — Stripe's server-side param parser distinguishes an indexed-key hash
+	 * from an actual array, and a schema expecting an array parameter (as
+	 * `expand` is) may not accept the indexed form. This builds the literal
+	 * `key[]=` repeated-parameter form Stripe's own docs show instead of
+	 * relying on WordPress's helper to happen to produce the same thing.
+	 *
+	 * @param mixed  $value      Current value (array to recurse into, or a scalar to emit).
+	 * @param string $key_prefix Accumulated key so far, e.g. 'created' or 'created[gte]'.
+	 * @param array  $pairs      Accumulator, by reference: each entry is one already-encoded "key=value" pair.
+	 */
+	private static function flatten_params( $value, $key_prefix, array &$pairs ) {
+		if ( is_array( $value ) ) {
+			$is_list = array_keys( $value ) === range( 0, count( $value ) - 1 );
+			foreach ( $value as $k => $v ) {
+				$new_prefix = $is_list
+					? $key_prefix . '[]'
+					: ( '' === $key_prefix ? (string) $k : $key_prefix . '[' . $k . ']' );
+				self::flatten_params( $v, $new_prefix, $pairs );
+			}
+			return;
+		}
+
+		if ( is_bool( $value ) ) {
+			$value = $value ? 'true' : 'false';
+		}
+
+		$pairs[] = rawurlencode( $key_prefix ) . '=' . rawurlencode( (string) $value );
 	}
 
 	/**
