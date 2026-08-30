@@ -119,11 +119,14 @@ function wsr_init() {
 	// class-wsr-activator.php is already loaded unconditionally below (it
 	// must be available at activation time regardless of whether this
 	// function runs this request).
+	require_once WSR_PLUGIN_DIR . 'includes/class-wsr-stripe-client.php';
+	require_once WSR_PLUGIN_DIR . 'includes/class-wsr-settings.php';
+	WSR_Settings::init();
+
 	// Later build-order steps will require_once their classes here:
-	// class-wsr-stripe-client.php, class-wsr-event-ledger.php,
-	// class-wsr-hook-listener.php, class-wsr-reconciler.php,
-	// class-wsr-scheduler.php, class-wsr-fixer.php, class-wsr-audit-log.php,
-	// class-wsr-admin-dashboard.php, class-wsr-settings.php.
+	// class-wsr-event-ledger.php, class-wsr-hook-listener.php,
+	// class-wsr-reconciler.php, class-wsr-scheduler.php, class-wsr-fixer.php,
+	// class-wsr-audit-log.php, class-wsr-admin-dashboard.php.
 }
 
 /**
