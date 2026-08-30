@@ -81,6 +81,7 @@ class WSR_Encryption {
 			return '';
 		}
 
+		// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_decode -- decoding this class's own binary ciphertext envelope for storage in a text column, not obfuscating code. $strict=true rejects anything that isn't valid base64 outright.
 		$raw = base64_decode( substr( $stored, strlen( self::PREFIX ) ), true );
 		if ( false === $raw ) {
 			return '';

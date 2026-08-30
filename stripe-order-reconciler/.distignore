@@ -1,0 +1,12 @@
+\.git
+\.gitignore
+\.distignore
+\.phpunit\.result\.cache
+composer\.json
+composer\.lock
+phpunit\.xml\.dist
+tests
+dev-tests
+vendor
+Thumbs\.db
+\.DS_Store
