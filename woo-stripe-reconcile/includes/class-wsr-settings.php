@@ -59,17 +59,32 @@ class WSR_Settings {
 
 	/**
 	 * The key actually in use: a wp-config constant takes priority over the
-	 * stored option. Per TECHNICAL_SPEC.md, this is the documented secure
-	 * path since WordPress core's own Secrets API (wp_set_secret()) hasn't
-	 * shipped yet — WordPress.org doesn't currently mandate encrypting a
-	 * plugin-stored option, but the constant path avoids the question
-	 * entirely for merchants who have file access.
+	 * stored option (per TECHNICAL_SPEC.md, the constant path avoids the
+	 * storage question entirely for merchants who have file access). The
+	 * option itself is encrypted at rest via WSR_Encryption (independent
+	 * review, round 2 — this used to be plain text).
+	 *
+	 * Transparently migrates a legacy plaintext value (saved before
+	 * encryption-at-rest existed) to the encrypted format on first read,
+	 * so an already-configured merchant doesn't have to re-enter their
+	 * key for it to become protected.
 	 */
 	public static function get_api_key() {
 		if ( self::key_is_from_constant() ) {
 			return constant( self::KEY_CONSTANT );
 		}
-		return get_option( self::OPTION_API_KEY, '' );
+
+		$stored = get_option( self::OPTION_API_KEY, '' );
+		if ( '' === $stored ) {
+			return '';
+		}
+
+		if ( ! WSR_Encryption::is_encrypted( $stored ) ) {
+			update_option( self::OPTION_API_KEY, WSR_Encryption::encrypt( $stored ), false );
+			return $stored;
+		}
+
+		return WSR_Encryption::decrypt( $stored );
 	}
 
 	public static function key_is_from_constant() {
@@ -115,7 +130,10 @@ class WSR_Settings {
 			exit;
 		}
 
-		update_option( self::OPTION_API_KEY, $submitted_key, false ); // autoload=false: only needed on this settings screen and the reconciler run, not every page load.
+		// autoload=false: only needed on this settings screen and the
+		// reconciler run, not every page load. Encrypted at rest — see
+		// WSR_Encryption's class comment for the threat model.
+		update_option( self::OPTION_API_KEY, WSR_Encryption::encrypt( $submitted_key ), false );
 
 		$client  = new WSR_Stripe_Client( $submitted_key );
 		$results = $client->check_scopes();

@@ -37,6 +37,24 @@ class SettingsTest extends WSR_TestCase {
 		$this->assertSame( '', WSR_Settings::get_api_key() );
 	}
 
+	// --- encryption-at-rest (independent review, round 2) -------------------
+
+	public function test_get_api_key_transparently_migrates_a_legacy_plaintext_value() {
+		// Simulates a key saved before encryption-at-rest existed.
+		update_option( WSR_Settings::OPTION_API_KEY, 'rk_test_legacyplaintext' );
+
+		$this->assertSame( 'rk_test_legacyplaintext', WSR_Settings::get_api_key(), 'Must keep working immediately, with no merchant action required.' );
+
+		$stored = get_option( WSR_Settings::OPTION_API_KEY );
+		$this->assertTrue( WSR_Encryption::is_encrypted( $stored ), 'The very next read must have upgraded the stored value to encrypted form.' );
+		$this->assertStringNotContainsString( 'rk_test_legacyplaintext', $stored );
+	}
+
+	public function test_get_api_key_reads_back_an_already_encrypted_value() {
+		update_option( WSR_Settings::OPTION_API_KEY, WSR_Encryption::encrypt( 'rk_test_alreadyencrypted' ), false );
+		$this->assertSame( 'rk_test_alreadyencrypted', WSR_Settings::get_api_key() );
+	}
+
 	// --- environment_warning() ----------------------------------------------
 
 	public function test_no_warning_when_no_key_configured() {

@@ -117,6 +117,7 @@ function wsr_init() {
 	// class-wsr-activator.php is already loaded unconditionally below (it
 	// must be available at activation time regardless of whether this
 	// function runs this request).
+	require_once WSR_PLUGIN_DIR . 'includes/class-wsr-encryption.php';
 	require_once WSR_PLUGIN_DIR . 'includes/class-wsr-stripe-client.php';
 	require_once WSR_PLUGIN_DIR . 'includes/class-wsr-email-alerts.php';
 	require_once WSR_PLUGIN_DIR . 'includes/class-wsr-event-ledger.php';
