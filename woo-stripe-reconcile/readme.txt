@@ -4,7 +4,7 @@ Tags: woocommerce, stripe, reconciliation, orders, payments
 Requires at least: 6.8
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 1.0.0
+Stable tag: 1.1.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -40,6 +40,11 @@ No. It's specifically for stores using the third-party "WooCommerce Stripe Payme
 No. It only ever reads from Stripe and writes to your own WooCommerce order status. The Stripe API key it uses should be a restricted, read-only key with no write access at all.
 
 == Changelog ==
+
+= 1.1.0 =
+* Bulk Fix/Dismiss on the Open view — select multiple rows and act on them at once for a large backlog, instead of one click per row. Each row still goes through the same live Stripe re-verification and safety checks a single Fix/Dismiss click uses.
+* Found and fixed a restricted-key scope gap: Reviews:Read was required by Pass A's own Radar-review check but never validated by the settings screen's scope checker, so a key set up exactly per the documented instructions could pass every check yet fail outright on every real run.
+* Encrypted the Stripe API key at rest (AES-256-GCM); a previously-saved plaintext key is migrated automatically.
 
 = 1.0.0 =
 * Pass A: bulk PaymentIntent list-and-diff against local orders, detecting stuck-pending orders, wrongly-cancelled paid orders, and orphaned charges with no matching order.

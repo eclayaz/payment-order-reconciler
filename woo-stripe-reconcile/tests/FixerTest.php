@@ -242,4 +242,33 @@ class FixerTest extends WSR_TestCase {
 		$applied = $order->get_meta( '_wsr_fix_applied' );
 		$this->assertCount( 1, $applied, 'Re-fixing the same stripe_object_id must not duplicate the guard entry.' );
 	}
+
+	// --- dismiss() — extracted for bulk-action reuse (WSR_Admin_Dashboard) ---
+
+	public function test_dismiss_marks_an_open_row_dismissed() {
+		$id     = $this->insert_drift_row( array() );
+		$result = WSR_Fixer::dismiss( $id );
+
+		$this->assertSame( 1, $result );
+		$row = $this->drift_log_row_by_id( $id );
+		$this->assertSame( 'dismissed', $row->status );
+	}
+
+	public function test_dismiss_does_not_touch_an_already_fixed_row() {
+		$id = $this->insert_drift_row( array( 'status' => 'fixed' ) );
+		$result = WSR_Fixer::dismiss( $id );
+
+		$this->assertSame( 0, $result, 'Only an open row can be dismissed.' );
+		$row = $this->drift_log_row_by_id( $id );
+		$this->assertSame( 'fixed', $row->status );
+	}
+
+	public function test_dismiss_returns_zero_for_an_unknown_id() {
+		$this->assertSame( 0, WSR_Fixer::dismiss( 999999 ) );
+	}
+
+	private function drift_log_row_by_id( $id ) {
+		global $wpdb;
+		return $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$wpdb->prefix}wsr_drift_log WHERE id = %d", $id ) );
+	}
 }

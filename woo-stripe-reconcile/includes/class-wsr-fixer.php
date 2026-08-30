@@ -89,10 +89,24 @@ class WSR_Fixer {
 		$drift_id = isset( $_REQUEST['drift_id'] ) ? absint( $_REQUEST['drift_id'] ) : 0;
 		check_admin_referer( self::dismiss_nonce_action( $drift_id ) );
 
+		self::dismiss( $drift_id );
+
+		wp_safe_redirect( add_query_arg( 'wsr_notice', 'dismissed', self::redirect_target() ) );
+		exit;
+	}
+
+	/**
+	 * Dismisses one open drift row. Public + static, same reasoning as
+	 * apply_fix() above — both the single admin_post handler and
+	 * WSR_Admin_Dashboard's bulk-action processing use this directly.
+	 *
+	 * @return int 1 if a row was dismissed, 0 if it wasn't found or wasn't open.
+	 */
+	public static function dismiss( $drift_id ) {
 		global $wpdb;
 		$table = $wpdb->prefix . 'wsr_drift_log';
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- no wpdb abstraction exists for this table.
-		$wpdb->update(
+		return (int) $wpdb->update(
 			$table,
 			array( 'status' => 'dismissed' ),
 			array(
@@ -102,9 +116,6 @@ class WSR_Fixer {
 			array( '%s' ),
 			array( '%d', '%s' )
 		);
-
-		wp_safe_redirect( add_query_arg( 'wsr_notice', 'dismissed', self::redirect_target() ) );
-		exit;
 	}
 
 	/**

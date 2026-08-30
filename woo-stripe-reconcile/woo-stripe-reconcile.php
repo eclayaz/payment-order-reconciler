@@ -3,7 +3,7 @@
  * Plugin Name:       WooCommerce Stripe Reconcile
  * Plugin URI:        https://github.com/eclayaz/woo-stripe-reconcile
  * Description:       Reconciles Stripe payment state against WooCommerce order state for stores on the standard Stripe gateway plugin. Self-hosted, read-only Stripe API key only — no data ever leaves your site.
- * Version:           1.0.0
+ * Version:           1.1.0
  * Requires at least: 6.8
  * Requires PHP:      7.4
  * Requires Plugins:  woocommerce
@@ -22,7 +22,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'WSR_VERSION', '1.0.0' );
+define( 'WSR_VERSION', '1.1.0' );
 define( 'WSR_PLUGIN_FILE', __FILE__ );
 define( 'WSR_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'WSR_PLUGIN_BASENAME', plugin_basename( __FILE__ ) );

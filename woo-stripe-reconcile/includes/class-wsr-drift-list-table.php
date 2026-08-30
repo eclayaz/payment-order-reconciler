@@ -31,7 +31,15 @@ class WSR_Drift_List_Table extends WP_List_Table {
 	}
 
 	public function get_columns() {
-		return array(
+		$columns = array();
+
+		// Bulk actions (and their checkbox column) only make sense on the
+		// Open view — Fixed/Dismissed rows have nothing left to bulk-act on.
+		if ( 'open' === $this->get_current_status() ) {
+			$columns['cb'] = '<input type="checkbox" />';
+		}
+
+		return $columns + array(
 			'order'    => __( 'Order', 'woo-stripe-reconcile' ),
 			'object'   => __( 'Stripe object', 'woo-stripe-reconcile' ),
 			'type'     => __( 'Type', 'woo-stripe-reconcile' ),
@@ -39,6 +47,28 @@ class WSR_Drift_List_Table extends WP_List_Table {
 			'states'   => __( 'Local → Stripe', 'woo-stripe-reconcile' ),
 			'seen'     => __( 'Detected', 'woo-stripe-reconcile' ),
 			'actions'  => __( 'Actions', 'woo-stripe-reconcile' ),
+		);
+	}
+
+	public function column_cb( $item ) {
+		printf( '<input type="checkbox" name="drift_id[]" value="%d" />', (int) $item->id );
+	}
+
+	/**
+	 * Fix and Dismiss here are bulk versions of the same-named row actions
+	 * in render_actions() below — WSR_Admin_Dashboard::maybe_process_bulk_action()
+	 * loops the selected IDs through the exact same WSR_Fixer methods a
+	 * single click would use, so every safety check (live re-verification,
+	 * lock check, fixable-type check) applies identically either way.
+	 * Only offered on the Open view, matching the checkbox column above.
+	 */
+	public function get_bulk_actions() {
+		if ( 'open' !== $this->get_current_status() ) {
+			return array();
+		}
+		return array(
+			'wsr_bulk_fix'     => __( 'Fix', 'woo-stripe-reconcile' ),
+			'wsr_bulk_dismiss' => __( 'Dismiss', 'woo-stripe-reconcile' ),
 		);
 	}
 
