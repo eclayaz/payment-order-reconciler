@@ -48,6 +48,17 @@ class WSR_Hook_Listener {
 			return; // Not a failure — see class comment.
 		}
 
+		// Claim the underlying Stripe event ID (when the notification
+		// payload carries one) before scheduling — Stripe delivery is
+		// at-least-once, and the gateway's own webhook processing can
+		// retry, so this hook can fire more than once for the same event.
+		// Without this, a retried webhook would stack a redundant
+		// verification on top of one already scheduled or completed.
+		$event_id = self::notification_event_id( $notification );
+		if ( ! WSR_Event_Ledger::claim( $event_id ) ) {
+			return; // Already handled this exact event.
+		}
+
 		self::schedule_verification( $order->get_id() );
 	}
 
@@ -117,6 +128,23 @@ class WSR_Hook_Listener {
 			$type = (string) $notification['type'];
 		}
 		return false !== strpos( $type, 'dispute' );
+	}
+
+	/**
+	 * The notification payload is the deserialized webhook JSON body,
+	 * which — when it's an actual Stripe Event object — carries the
+	 * event's own `id` at the top level. Not every call site is
+	 * guaranteed to pass one; WSR_Event_Ledger::claim() no-ops safely
+	 * when this returns empty.
+	 */
+	private static function notification_event_id( $notification ) {
+		if ( is_object( $notification ) && isset( $notification->id ) ) {
+			return (string) $notification->id;
+		}
+		if ( is_array( $notification ) && isset( $notification['id'] ) ) {
+			return (string) $notification['id'];
+		}
+		return '';
 	}
 
 	private static function schedule_verification( $order_id ) {

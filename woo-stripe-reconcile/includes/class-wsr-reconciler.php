@@ -64,6 +64,10 @@ class WSR_Reconciler {
 	 * @return array{pass_a: array|WP_Error, pass_b: array|WP_Error, webhook_health: array|WP_Error}
 	 */
 	public static function run_all() {
+		if ( class_exists( 'WSR_Event_Ledger' ) ) {
+			WSR_Event_Ledger::prune();
+		}
+
 		$pass_a         = self::run_pass_a();
 		$pass_b         = self::run_pass_b();
 		$webhook_health = self::run_webhook_health_check();
