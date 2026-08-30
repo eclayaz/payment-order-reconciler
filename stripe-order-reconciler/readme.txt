@@ -65,6 +65,11 @@ Not from this plugin — clicking Fix marks the order paid and completed via Woo
 
 The settings screen checks all seven required scopes individually and tells you which one(s) failed. A misconfigured key also shows clearly on the coverage status (Settings and the dashboard) as a failed run rather than a false "all clear."
 
+== Screenshots ==
+
+1. The dashboard: open drift, showing what disagrees with Stripe and why, with Fix/Dismiss actions per row (and bulk actions for a backlog).
+2. Settings: restricted-key entry with live validation of all seven required scopes.
+
 == Changelog ==
 
 = 1.1.0 =

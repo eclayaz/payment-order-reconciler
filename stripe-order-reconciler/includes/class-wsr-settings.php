@@ -49,8 +49,8 @@ class WSR_Settings {
 	public static function register_menu() {
 		add_submenu_page(
 			'woocommerce',
-			__( 'Stripe Reconcile', 'stripe-order-reconciler' ),
-			__( 'Stripe Reconcile', 'stripe-order-reconciler' ),
+			__( 'Stripe Reconciler', 'stripe-order-reconciler' ),
+			__( 'Stripe Reconciler', 'stripe-order-reconciler' ),
 			self::CAPABILITY,
 			'wsr-settings',
 			array( __CLASS__, 'render_page' )
@@ -215,7 +215,7 @@ class WSR_Settings {
 
 		?>
 		<div class="wrap">
-			<h1><?php esc_html_e( 'Stripe Reconcile — Settings', 'stripe-order-reconciler' ); ?></h1>
+			<h1><?php esc_html_e( 'Stripe Reconciler — Settings', 'stripe-order-reconciler' ); ?></h1>
 
 			<?php self::render_notice( $notice ); ?>
 
