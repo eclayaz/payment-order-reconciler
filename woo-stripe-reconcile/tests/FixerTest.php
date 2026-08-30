@@ -6,6 +6,22 @@ class FixerTest extends WSR_TestCase {
 		return $this->call_private( WSR_Fixer::class, 'is_locked', array( $order ) );
 	}
 
+	/**
+	 * Bug fix (independent review, round 2): apply_fix() now re-fetches the
+	 * PaymentIntent live from Stripe before acting (see class-wsr-fixer.php).
+	 * A partial mock of WSR_Stripe_Client — overriding only get() — lets
+	 * these tests control that live response without any real network call,
+	 * exactly the way ReconcilerChecksTest mocks WC_Order for date fields.
+	 */
+	private function client_returning( array $pi ) {
+		$client = $this->getMockBuilder( WSR_Stripe_Client::class )
+			->setConstructorArgs( array( 'rk_test_unused' ) )
+			->onlyMethods( array( 'get' ) )
+			->getMock();
+		$client->method( 'get' )->willReturn( $pi );
+		return $client;
+	}
+
 	// --- is_locked() — the lock-expiry parsing the third review got wrong -----
 
 	public function test_is_locked_false_when_no_lock_meta() {
@@ -67,17 +83,71 @@ class FixerTest extends WSR_TestCase {
 	}
 
 	public function test_apply_fix_rejects_info_severity_disputed_row() {
+		// Bug fix (independent review, round 2): this must reflect the
+		// *live* re-fetched dispute state, not the stored row's own
+		// severity snapshot — see class-wsr-fixer.php's apply_fix(). The
+		// row itself is stored at 'high' (as detection would leave it
+		// before a dispute opened); the live PI carries the open dispute.
+		$order = $this->make_order( 'pending' );
+		$pi    = $this->base_pi( array( 'latest_charge' => array( 'dispute' => array( 'status' => 'needs_response' ) ) ) );
+		$id    = $this->insert_drift_row(
+			array(
+				'order_id'         => $order->get_id(),
+				'stripe_object_id' => $pi['id'],
+				'drift_type'       => 'stuck_pending',
+				'severity'         => 'high',
+			)
+		);
+		$result = WSR_Fixer::apply_fix( $id, 1, $this->client_returning( $pi ) );
+		$this->assertWPError( $result );
+		$this->assertSame( 'wsr_disputed_no_fix', $result->get_error_code(), 'A currently-disputed/under-review match must never be auto-fixed, enforced again at fix time, not just at detection time.' );
+
+		$row = $this->drift_log_row( $pi['id'] );
+		$this->assertSame( 'info', $row->severity, 'The row\'s stored severity must be refreshed to info immediately, not left stale until the next scheduled run.' );
+	}
+
+	public function test_apply_fix_self_heals_when_no_longer_drifting_live() {
+		// Another process (a webhook, or a prior fix) already resolved this
+		// between detection and now — the live re-check must find no drift
+		// and mark the row fixed automatically rather than acting on stale
+		// data or leaving the row open forever.
+		$order = $this->make_order( 'processing' );
+		$pi    = $this->base_pi();
+		$id    = $this->insert_drift_row(
+			array(
+				'order_id'         => $order->get_id(),
+				'stripe_object_id' => $pi['id'],
+				'drift_type'       => 'stuck_pending',
+				'severity'         => 'high',
+			)
+		);
+		$result = WSR_Fixer::apply_fix( $id, 1, $this->client_returning( $pi ) );
+		$this->assertWPError( $result );
+		$this->assertSame( 'wsr_already_resolved', $result->get_error_code() );
+
+		$row = $this->drift_log_row( $pi['id'] );
+		$this->assertSame( 'fixed', $row->status );
+		$this->assertSame( 'system', $row->resolved_by, 'Self-heal is attributed to the system, not the admin who merely clicked Fix on stale data.' );
+	}
+
+	public function test_apply_fix_refuses_when_live_fetch_fails() {
 		$order = $this->make_order( 'pending' );
 		$id    = $this->insert_drift_row(
 			array(
 				'order_id'   => $order->get_id(),
 				'drift_type' => 'stuck_pending',
-				'severity'   => 'info',
+				'severity'   => 'high',
 			)
 		);
-		$result = WSR_Fixer::apply_fix( $id, 1 );
+		$client = $this->getMockBuilder( WSR_Stripe_Client::class )
+			->setConstructorArgs( array( 'rk_test_unused' ) )
+			->onlyMethods( array( 'get' ) )
+			->getMock();
+		$client->method( 'get' )->willReturn( new WP_Error( 'wsr_http_error', 'Stripe unreachable' ) );
+
+		$result = WSR_Fixer::apply_fix( $id, 1, $client );
 		$this->assertWPError( $result );
-		$this->assertSame( 'wsr_disputed_no_fix', $result->get_error_code(), 'A currently-disputed/under-review match must never be auto-fixed, enforced again at fix time, not just at detection time.' );
+		$this->assertSame( 'wsr_fix_verify_failed', $result->get_error_code(), 'Must refuse to act on a stale snapshot when live verification itself fails, not fall back to the cached row.' );
 	}
 
 	public function test_apply_fix_rejects_missing_order() {
@@ -102,21 +172,26 @@ class FixerTest extends WSR_TestCase {
 
 	public function test_apply_fix_happy_path_stuck_pending() {
 		$order = $this->make_order( 'pending' );
+		$pi    = $this->base_pi();
 		$id    = $this->insert_drift_row(
 			array(
-				'order_id'   => $order->get_id(),
-				'drift_type' => 'stuck_pending',
-				'severity'   => 'high',
+				'order_id'         => $order->get_id(),
+				'stripe_object_id' => $pi['id'],
+				'drift_type'       => 'stuck_pending',
+				'severity'         => 'high',
 			)
 		);
 
-		$result = WSR_Fixer::apply_fix( $id, 42 );
+		$result = WSR_Fixer::apply_fix( $id, 42, $this->client_returning( $pi ) );
 		$this->assertTrue( $result );
 
 		$order = wc_get_order( $order->get_id() );
 		$this->assertNotFalse( $order->get_date_paid(), 'payment_complete() must have set date_paid.' );
 		$this->assertSame( 'yes', $order->get_meta( '_stripe_charge_captured' ) );
 		$this->assertSame( '', $order->get_meta( '_stripe_payment_awaiting_action' ), 'Must be cleared, not left stale.' );
+		// Bug fix (independent review, round 2): must record the live
+		// PaymentIntent's real charge ID, not the empty get_transaction_id().
+		$this->assertSame( $pi['latest_charge']['id'], $order->get_transaction_id() );
 
 		$applied = $order->get_meta( '_wsr_fix_applied' );
 		$this->assertIsArray( $applied );
@@ -129,15 +204,17 @@ class FixerTest extends WSR_TestCase {
 
 	public function test_apply_fix_happy_path_wrongly_cancelled() {
 		$order = $this->make_order( 'cancelled' );
+		$pi    = $this->base_pi();
 		$id    = $this->insert_drift_row(
 			array(
-				'order_id'   => $order->get_id(),
-				'drift_type' => 'wrongly_cancelled_paid',
-				'severity'   => 'critical',
+				'order_id'         => $order->get_id(),
+				'stripe_object_id' => $pi['id'],
+				'drift_type'       => 'wrongly_cancelled_paid',
+				'severity'         => 'critical',
 			)
 		);
 
-		$result = WSR_Fixer::apply_fix( $id, 7 );
+		$result = WSR_Fixer::apply_fix( $id, 7, $this->client_returning( $pi ) );
 		$this->assertTrue( $result );
 
 		$order = wc_get_order( $order->get_id() );
@@ -149,6 +226,7 @@ class FixerTest extends WSR_TestCase {
 		$order->update_meta_data( '_wsr_fix_applied', array( 'pi_already_fixed_once' ) );
 		$order->save();
 
+		$pi = $this->base_pi( array( 'id' => 'pi_already_fixed_once' ) );
 		$id = $this->insert_drift_row(
 			array(
 				'order_id'         => $order->get_id(),
@@ -158,7 +236,7 @@ class FixerTest extends WSR_TestCase {
 			)
 		);
 
-		WSR_Fixer::apply_fix( $id, 1 );
+		WSR_Fixer::apply_fix( $id, 1, $this->client_returning( $pi ) );
 
 		$order   = wc_get_order( $order->get_id() );
 		$applied = $order->get_meta( '_wsr_fix_applied' );

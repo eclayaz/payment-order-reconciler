@@ -164,20 +164,23 @@ $row_after = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$table} WHERE strip
 wsr_test_assert( 'upsert_drift: re-detecting a dismissed row is a no-op (dismissal persists)', 'dismissed_skip' === $r3 && 'dismissed' === $row_after->status );
 $wpdb->delete( $table, array( 'id' => $row->id ) );
 
-// --- 12. upsert_drift: needs_review escalates to orphaned_charge at detection_count 2, mutated in place ---
+// --- 12. upsert_unresolved_drift: needs_review escalates to orphaned_charge at detection_count 2, mutated in place ---
+//
+// Bug fix (independent review, round 2): escalation used to live inside
+// upsert_drift() itself, keyed on (object, drift_type) together — which
+// broke on the third detection, since escalating the row's drift_type
+// changed its own open_key and let the next insert attempt at the
+// original drift_type succeed as a duplicate. It's now its own method,
+// upsert_unresolved_drift(), keyed only on stripe_object_id. See
+// ReconcilerUpsertDriftTest::test_unresolved_third_and_later_detections_do_not_duplicate_the_escalated_row
+// for the full multi-day regression this script only spot-checks.
 $needs_review_object_id = 'pi_test_escalate_' . wp_generate_password( 8, false );
-$needs_review_payload   = array(
-	'drift_type'    => 'needs_review',
-	'severity'      => 'high',
-	'local_status'  => null,
-	'stripe_status' => 'succeeded',
-	'details'       => array(),
-);
-wsr_test_call_private( 'upsert_drift', array( null, $needs_review_object_id, $needs_review_payload ) );
-$escalate_result = wsr_test_call_private( 'upsert_drift', array( null, $needs_review_object_id, $needs_review_payload ) );
+$needs_review_details   = array( 'stripe_status' => 'succeeded' );
+wsr_test_call_private( 'upsert_unresolved_drift', array( $needs_review_object_id, $needs_review_details ) );
+$escalate_result = wsr_test_call_private( 'upsert_unresolved_drift', array( $needs_review_object_id, $needs_review_details ) );
 $escalated_rows  = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table} WHERE stripe_object_id = %s", $needs_review_object_id ) );
-wsr_test_assert( 'upsert_drift: escalates needs_review to orphaned_charge at detection_count 2', 'escalated' === $escalate_result );
-wsr_test_assert( 'upsert_drift: escalation mutates in place — exactly one row, now orphaned_charge', 1 === count( $escalated_rows ) && 'orphaned_charge' === $escalated_rows[0]->drift_type );
+wsr_test_assert( 'upsert_unresolved_drift: escalates needs_review to orphaned_charge at detection_count 2', 'escalated' === $escalate_result );
+wsr_test_assert( 'upsert_unresolved_drift: escalation mutates in place — exactly one row, now orphaned_charge', 1 === count( $escalated_rows ) && 'orphaned_charge' === $escalated_rows[0]->drift_type );
 $wpdb->delete( $table, array( 'stripe_object_id' => $needs_review_object_id ) );
 
 // --- Cleanup -----------------------------------------------------------

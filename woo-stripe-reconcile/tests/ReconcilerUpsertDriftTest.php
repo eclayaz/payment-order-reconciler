@@ -83,17 +83,40 @@ class ReconcilerUpsertDriftTest extends WSR_TestCase {
 		$this->assertSame( 2, $count );
 	}
 
-	public function test_needs_review_escalates_to_orphaned_charge_at_detection_count_two() {
-		$payload = $this->drift_payload(
-			array(
-				'drift_type'    => 'needs_review',
-				'local_status'  => null,
-				'stripe_status' => 'succeeded',
-			)
-		);
+	// --- upsert_unresolved_drift(): needs_review -> orphaned_charge lineage ---
+	//
+	// A separate method from upsert_drift() above — see its docblock.
+	// Round-2 independent review found the original design (escalation
+	// handled inside upsert_drift() itself, keyed on (object, drift_type)
+	// together) broke on exactly the third detection: escalating the row's
+	// drift_type changed its own open_key, so the *next* insert attempt at
+	// the original drift_type no longer collided with it and succeeded as
+	// a duplicate — and as a direct consequence, dismissing the escalated
+	// row never stuck, because the next run's "insert" was against a
+	// different open_key than the dismissed row's. Both failure modes are
+	// covered explicitly below, walking a realistic multi-day sequence
+	// rather than stopping at two detections the way the original suite did.
 
-		$this->upsert( null, 'pi_orphan', $payload );
-		$outcome = $this->upsert( null, 'pi_orphan', $payload );
+	private function upsert_unresolved( $stripe_object_id, array $details = array() ) {
+		return $this->call_private(
+			WSR_Reconciler::class,
+			'upsert_unresolved_drift',
+			array( $stripe_object_id, array_merge( array( 'stripe_status' => 'succeeded' ), $details ) )
+		);
+	}
+
+	public function test_unresolved_first_detection_inserts_needs_review() {
+		$outcome = $this->upsert_unresolved( 'pi_orphan' );
+		$this->assertSame( 'inserted', $outcome );
+
+		$row = $this->drift_log_row( 'pi_orphan' );
+		$this->assertSame( 'needs_review', $row->drift_type, 'Must not escalate on the very first detection — only at detection_count >= 2.' );
+		$this->assertNull( $row->order_id );
+	}
+
+	public function test_unresolved_escalates_to_orphaned_charge_at_detection_count_two() {
+		$this->upsert_unresolved( 'pi_orphan' );
+		$outcome = $this->upsert_unresolved( 'pi_orphan' );
 
 		$this->assertSame( 'escalated', $outcome );
 
@@ -103,13 +126,42 @@ class ReconcilerUpsertDriftTest extends WSR_TestCase {
 		$this->assertSame( 'orphaned_charge', $rows[0]->drift_type );
 	}
 
-	public function test_does_not_escalate_on_first_detection() {
-		$payload = $this->drift_payload( array( 'drift_type' => 'needs_review', 'local_status' => null ) );
-		$outcome = $this->upsert( null, 'pi_orphan', $payload );
-		$this->assertSame( 'inserted', $outcome );
+	public function test_unresolved_third_and_later_detections_do_not_duplicate_the_escalated_row() {
+		// This is the exact bug: day 1 inserts needs_review, day 2
+		// escalates to orphaned_charge, day 3's re-detection must update
+		// that SAME row (still keyed only on stripe_object_id, regardless
+		// of its now-changed drift_type) — not silently succeed as a
+		// fresh "inserted" duplicate under the original needs_review key.
+		$this->upsert_unresolved( 'pi_orphan' );                    // day 1: inserted
+		$this->upsert_unresolved( 'pi_orphan' );                    // day 2: escalated
+		$day3 = $this->upsert_unresolved( 'pi_orphan' );             // day 3
+		$day4 = $this->upsert_unresolved( 'pi_orphan' );             // day 4
+
+		$this->assertSame( 'updated', $day3 );
+		$this->assertSame( 'updated', $day4 );
+
+		global $wpdb;
+		$rows = $wpdb->get_results( "SELECT * FROM {$wpdb->prefix}wsr_drift_log WHERE stripe_object_id = 'pi_orphan'" );
+		$this->assertCount( 1, $rows, 'A single continuing charge must never produce a second row, no matter how many times it is re-detected after escalating.' );
+		$this->assertSame( 'orphaned_charge', $rows[0]->drift_type );
+		$this->assertSame( 4, (int) $rows[0]->detection_count );
+	}
+
+	public function test_dismissing_an_escalated_orphaned_charge_row_actually_persists() {
+		$this->upsert_unresolved( 'pi_orphan' ); // day 1: inserted (needs_review)
+		$this->upsert_unresolved( 'pi_orphan' ); // day 2: escalated (orphaned_charge)
 
 		$row = $this->drift_log_row( 'pi_orphan' );
-		$this->assertSame( 'needs_review', $row->drift_type, 'Must not escalate on the very first detection — only at detection_count >= 2.' );
+		global $wpdb;
+		$wpdb->update( $wpdb->prefix . 'wsr_drift_log', array( 'status' => 'dismissed' ), array( 'id' => $row->id ) );
+
+		$day3 = $this->upsert_unresolved( 'pi_orphan' );
+
+		$this->assertSame( 'dismissed_skip', $day3, 'Dismissing the escalated row must actually block re-detection — not get silently bypassed by a fresh needs_review insert.' );
+
+		$after = $wpdb->get_results( "SELECT * FROM {$wpdb->prefix}wsr_drift_log WHERE stripe_object_id = 'pi_orphan'" );
+		$this->assertCount( 1, $after, 'No duplicate row should have appeared alongside the dismissed one.' );
+		$this->assertSame( 'dismissed', $after[0]->status );
 	}
 
 	public function test_different_drift_types_for_the_same_object_are_independent() {

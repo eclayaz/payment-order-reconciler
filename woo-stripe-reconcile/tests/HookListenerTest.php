@@ -64,6 +64,19 @@ class HookListenerTest extends WSR_TestCase {
 		$order        = $this->make_order( 'on-hold' );
 		$notification = (object) array( 'id' => 'evt_dispute1', 'type' => 'charge.dispute.created' );
 
+		// ActionScheduler's own DB store commits independently of
+		// WP_UnitTestCase's per-test rollback transaction (a known
+		// ActionScheduler/WP-test-suite interaction, not something this
+		// plugin's code controls), so scheduled-action rows from earlier
+		// wp-env test runs — potentially days apart — accumulate
+		// permanently in wp_actionscheduler_actions rather than being
+		// cleaned up between tests. Since WC order IDs reliably start
+		// fresh each run, a leftover row for this exact order_id from an
+		// unrelated past run can coincidentally exist and falsely satisfy
+		// the assertion below. Clear it first so this test verifies only
+		// the effect of *this* call, not accumulated cross-run noise.
+		as_unschedule_all_actions( WSR_Hook_Listener::VERIFY_HOOK, array( 'order_id' => $order->get_id() ), WSR_Scheduler::GROUP );
+
 		WSR_Hook_Listener::on_webhook_payment_error( $order, $notification );
 
 		$this->assertFalse(

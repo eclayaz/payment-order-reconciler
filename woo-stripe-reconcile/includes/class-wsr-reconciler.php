@@ -109,6 +109,7 @@ class WSR_Reconciler {
 			'resolved_to_order'         => 0,
 			'skipped_other_site'        => 0,
 			'skipped_too_fresh'         => 0,
+			'skipped_not_succeeded'     => 0,
 			'needs_review'              => 0,
 			'orphaned_charge_escalated' => 0,
 			'stuck_pending_flagged'     => 0,
@@ -254,6 +255,21 @@ class WSR_Reconciler {
 		}
 
 		if ( null === $order_id ) {
+			// Bug fix (independent review, round 2): an abandoned checkout
+			// (requires_payment_method, requires_confirmation, canceled,
+			// etc.) resolves to no order for exactly the same reason a
+			// genuinely lost payment does — but it is not an orphaned
+			// charge, because no charge was ever made. Only a PaymentIntent
+			// that actually succeeded is a candidate at all. On the
+			// Checkout Session / Adaptive Pricing flow specifically (this
+			// project's own flagship evidence case), every abandoned cart
+			// creates exactly this kind of order-less, non-succeeded
+			// PaymentIntent — without this guard, every one of them would
+			// have been flagged as a false "orphaned charge."
+			if ( ! isset( $pi['status'] ) || 'succeeded' !== $pi['status'] ) {
+				$summary['skipped_not_succeeded']++;
+				return;
+			}
 			self::handle_unresolved( $pi, $metadata, $summary );
 			return;
 		}
@@ -292,17 +308,59 @@ class WSR_Reconciler {
 	 */
 	private static function resolve_via_metadata( array $metadata, array $order_maps ) {
 		if ( ! empty( $metadata['signature'] ) && is_string( $metadata['signature'] ) ) {
-			$order_id = (int) strtok( $metadata['signature'], ':' );
-			if ( $order_id > 0 && isset( $order_maps['by_id'][ $order_id ] ) ) {
-				return $order_id;
+			$parts    = explode( ':', $metadata['signature'], 2 );
+			$order_id = isset( $parts[0] ) ? (int) $parts[0] : 0;
+			$hash     = isset( $parts[1] ) ? $parts[1] : '';
+
+			// Bug fix (independent review, round 2): the leading order ID
+			// alone was being trusted blindly. Two stores (or a staging
+			// and production copy of the same store) sharing one Stripe
+			// account will have near-total order-ID overlap — a foreign
+			// PaymentIntent whose ID happens to match a real local order
+			// ID would previously resolve straight to that unrelated
+			// order, and a Fix click would then mark it paid. Verifying
+			// the hash half of the signature (which the gateway itself
+			// derives from that specific order's key/customer/amount)
+			// rejects the collision instead of trusting a bare integer.
+			if ( $order_id > 0 && $hash && isset( $order_maps['by_id'][ $order_id ] ) ) {
+				$order = $order_maps['by_id'][ $order_id ];
+				if ( self::signature_hash_matches( $order, $hash ) ) {
+					return $order_id;
+				}
 			}
 		}
 
 		if ( ! empty( $metadata['order_key'] ) && isset( $order_maps['by_order_key'][ $metadata['order_key'] ] ) ) {
+			// order_key needs no equivalent check — it's a high-entropy
+			// per-order random string (wc_order_...), not a small sequential
+			// integer, so a cross-store collision here isn't a realistic risk.
 			return $order_maps['by_order_key'][ $metadata['order_key'] ];
 		}
 
 		return null;
+	}
+
+	/**
+	 * Replicates the gateway's own (protected) get_order_signature() hash
+	 * exactly, confirmed against the installed gateway's source:
+	 * md5(implode('-', [order_id, order_key, customer_id, stripe_minor_unit_amount])).
+	 * get_customer_id() never actually returns null in practice — its `?? ''`
+	 * in the gateway's own code is dead code — so this uses the raw int
+	 * (0 for a guest order) to match exactly.
+	 */
+	private static function signature_hash_matches( WC_Order $order, $hash ) {
+		if ( ! class_exists( 'WC_Stripe_Helper' ) || ! method_exists( 'WC_Stripe_Helper', 'get_stripe_amount' ) ) {
+			return false; // Can't verify at all — fail closed, not open.
+		}
+
+		$expected_parts = array(
+			absint( $order->get_id() ),
+			$order->get_order_key(),
+			$order->get_customer_id(),
+			WC_Stripe_Helper::get_stripe_amount( $order->get_total(), $order->get_currency() ),
+		);
+
+		return hash_equals( md5( implode( '-', $expected_parts ) ), (string) $hash );
 	}
 
 	private static function resolve_via_intent_map( $pi_id, array $order_maps ) {
@@ -347,24 +405,112 @@ class WSR_Reconciler {
 			return;
 		}
 
-		$drift = array(
-			'drift_type'    => 'needs_review',
-			'severity'      => 'high',
-			'local_status'  => null,
+		$details = array(
+			'amount'        => isset( $pi['amount'] ) ? $pi['amount'] : null,
+			'currency'      => isset( $pi['currency'] ) ? $pi['currency'] : null,
+			'reason'        => '' === $site_url ? 'no_site_url_metadata' : 'unresolved_with_matching_site',
 			'stripe_status' => isset( $pi['status'] ) ? $pi['status'] : '',
-			'details'       => array(
-				'amount'   => isset( $pi['amount'] ) ? $pi['amount'] : null,
-				'currency' => isset( $pi['currency'] ) ? $pi['currency'] : null,
-				'reason'   => '' === $site_url ? 'no_site_url_metadata' : 'unresolved_with_matching_site',
-			),
 		);
 
-		$outcome = self::upsert_drift( null, $pi_id, $drift );
+		$outcome = self::upsert_unresolved_drift( $pi_id, $details );
 		if ( 'escalated' === $outcome ) {
 			$summary['orphaned_charge_escalated']++;
 		} else {
 			$summary['needs_review']++;
 		}
+	}
+
+	/**
+	 * Upsert path for the needs_review -> orphaned_charge lineage,
+	 * separate from upsert_drift() because of a real bug found by
+	 * independent review, round 2: needs_review and orphaned_charge are
+	 * escalation *stages of one continuing issue* ("this charge has no
+	 * matching order"), not two independent problems the way
+	 * stuck_pending and wrongly_cancelled_paid are for a resolved order.
+	 * upsert_drift() keys its open_key collision lookup on
+	 * (stripe_object_id, drift_type) together — so once a row escalates
+	 * from needs_review to orphaned_charge, the *next* detection's insert
+	 * attempt at drift_type='needs_review' no longer collides with it at
+	 * all: it succeeds as a brand-new duplicate row, the existing
+	 * escalated row is never touched, and any dismissal on that escalated
+	 * row is silently defeated (a fresh needs_review row reappears next
+	 * run). Reproduced and confirmed both failure modes in review.
+	 *
+	 * This method's collision lookup spans BOTH drift_type values for the
+	 * same stripe_object_id, so the same underlying charge always maps to
+	 * exactly one row across its entire needs_review -> orphaned_charge
+	 * lifetime, and a dismissal on it — at either stage — persists
+	 * correctly the same way upsert_drift()'s open_key already does for
+	 * the resolved-order checks.
+	 *
+	 * @param string $stripe_object_id PaymentIntent ID.
+	 * @param array  $details          amount/currency/reason/stripe_status.
+	 * @return string 'inserted' | 'updated' | 'escalated' | 'dismissed_skip' | 'error'
+	 */
+	private static function upsert_unresolved_drift( $stripe_object_id, array $details ) {
+		global $wpdb;
+		$table = $wpdb->prefix . 'wsr_drift_log';
+		$now   = current_time( 'mysql', true );
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared -- $table is our own constant prefix.
+		$existing = $wpdb->get_row(
+			$wpdb->prepare(
+				"SELECT id, status, drift_type, detection_count FROM {$table}
+				 WHERE stripe_object_id = %s AND drift_type IN ('needs_review','orphaned_charge') AND status IN ('open','dismissed')",
+				$stripe_object_id
+			)
+		);
+
+		if ( ! $existing ) {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- no wpdb abstraction exists for this table.
+			$inserted = $wpdb->insert(
+				$table,
+				array(
+					'order_id'                   => null,
+					'stripe_object_id'           => $stripe_object_id,
+					'drift_type'                 => 'needs_review',
+					'severity'                   => 'high',
+					'local_status_at_detection'  => null,
+					'stripe_status_at_detection' => $details['stripe_status'],
+					'status'                     => 'open',
+					'first_detected_at'          => $now,
+					'detected_at'                => $now,
+					'detection_count'            => 1,
+					'details'                    => wp_json_encode( $details ),
+				),
+				array( '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%s' )
+			);
+			return false !== $inserted ? 'inserted' : 'error';
+		}
+
+		if ( 'dismissed' === $existing->status ) {
+			return 'dismissed_skip';
+		}
+
+		$new_count = (int) $existing->detection_count + 1;
+		$new_type  = $existing->drift_type;
+		$outcome   = 'updated';
+
+		if ( 'needs_review' === $existing->drift_type && $new_count >= 2 ) {
+			$new_type = 'orphaned_charge';
+			$outcome  = 'escalated';
+		}
+
+		$wpdb->update(
+			$table,
+			array(
+				'detected_at'                => $now,
+				'detection_count'            => $new_count,
+				'drift_type'                 => $new_type,
+				'stripe_status_at_detection' => $details['stripe_status'],
+				'details'                    => wp_json_encode( $details ),
+			),
+			array( 'id' => $existing->id ),
+			array( '%s', '%d', '%s', '%s', '%s' ),
+			array( '%d' )
+		);
+
+		return $outcome;
 	}
 
 	/**
@@ -426,6 +572,30 @@ class WSR_Reconciler {
 			return null;
 		}
 		return $charge[ $field ];
+	}
+
+	/**
+	 * Public dispatcher used by WSR_Fixer to re-verify, against a freshly
+	 * re-fetched PaymentIntent, that a drift row is still real immediately
+	 * before applying a fix — added by independent review, round 2, which
+	 * found the fix action had no live re-check at all and could act on a
+	 * stale, cached severity snapshot from whenever the row was originally
+	 * detected. This reuses the exact same check functions Pass A itself
+	 * uses, so "is this still drifting, and is it still not disputed" is
+	 * answered identically whether it's Pass A or a fix-time re-check
+	 * asking.
+	 *
+	 * @return array|null Same shape as the underlying check, or null for
+	 *                     an unrecognized/non-fixable drift_type.
+	 */
+	public static function check_drift_still_applies( WC_Order $order, array $pi, $drift_type ) {
+		if ( 'stuck_pending' === $drift_type ) {
+			return self::check_stuck_pending( $order, $pi );
+		}
+		if ( 'wrongly_cancelled_paid' === $drift_type ) {
+			return self::check_wrongly_cancelled( $order, $pi );
+		}
+		return null;
 	}
 
 	/**
@@ -554,16 +724,26 @@ class WSR_Reconciler {
 	/**
 	 * Inserts a new drift row, or — on an open_key collision — updates the
 	 * existing one: bumps detection_count, refreshes the detected_at/
-	 * severity/status snapshot, and (for needs_review specifically)
-	 * escalates to orphaned_charge once detection_count reaches 2 by
-	 * mutating drift_type in place. Never inserts a second row for an
-	 * already-open drift, and never resurrects a dismissed one — see
-	 * TECHNICAL_SPEC.md's end-to-end trace for why both of those matter.
+	 * severity/status snapshot. Never inserts a second row for an
+	 * already-open drift, and never resurrects a dismissed one.
 	 *
-	 * @param int|null $order_id         Null for needs_review/orphaned_charge.
+	 * For the two order-resolved checks only (stuck_pending,
+	 * wrongly_cancelled_paid) — these are genuinely independent problem
+	 * categories for a given order, so keying uniqueness on
+	 * (stripe_object_id, drift_type) together is correct here. The
+	 * needs_review -> orphaned_charge lineage is handled by the separate
+	 * upsert_unresolved_drift() instead: those two are escalation stages
+	 * of *one* continuing issue, not independent categories, and an
+	 * earlier version of this method tried to handle both cases with the
+	 * same (stripe_object_id, drift_type)-keyed lookup — which broke the
+	 * escalation lineage the moment a row's drift_type changed out from
+	 * under it (found and fixed by independent review, round 2; see
+	 * upsert_unresolved_drift()'s docblock for the full failure mode).
+	 *
+	 * @param int|null $order_id         Local order ID.
 	 * @param string   $stripe_object_id PaymentIntent ID.
 	 * @param array    $drift            drift_type, severity, local_status, stripe_status, details.
-	 * @return string 'inserted' | 'updated' | 'escalated' | 'dismissed_skip'
+	 * @return string 'inserted' | 'updated' | 'dismissed_skip' | 'error'
 	 */
 	private static function upsert_drift( $order_id, $stripe_object_id, array $drift ) {
 		global $wpdb;
@@ -619,31 +799,23 @@ class WSR_Reconciler {
 		}
 
 		$new_count = (int) $existing->detection_count + 1;
-		$new_type  = $existing->drift_type;
-		$outcome   = 'updated';
-
-		if ( 'needs_review' === $existing->drift_type && $new_count >= 2 ) {
-			$new_type = 'orphaned_charge';
-			$outcome  = 'escalated';
-		}
 
 		$wpdb->update(
 			$table,
 			array(
 				'detected_at'                => $now,
 				'detection_count'            => $new_count,
-				'drift_type'                 => $new_type,
 				'severity'                   => $drift['severity'],
 				'local_status_at_detection'  => $drift['local_status'],
 				'stripe_status_at_detection' => $drift['stripe_status'],
 				'details'                    => wp_json_encode( $drift['details'] ),
 			),
 			array( 'id' => $existing->id ),
-			array( '%s', '%d', '%s', '%s', '%s', '%s', '%s' ),
+			array( '%s', '%d', '%s', '%s', '%s', '%s' ),
 			array( '%d' )
 		);
 
-		return $outcome;
+		return 'updated';
 	}
 
 	/**

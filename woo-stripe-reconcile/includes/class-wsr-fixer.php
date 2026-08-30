@@ -94,11 +94,14 @@ class WSR_Fixer {
 	 * admin_post handler and future callers (e.g. a bulk-action in the
 	 * real dashboard) can use it directly.
 	 *
-	 * @param int $drift_id wsr_drift_log.id
-	 * @param int $user_id  WP user applying the fix, for audit attribution.
+	 * @param int                  $drift_id wsr_drift_log.id
+	 * @param int                  $user_id  WP user applying the fix, for audit attribution.
+	 * @param WSR_Stripe_Client|null $client Optional injected client, for tests only —
+	 *                                        production callers never pass this; it's
+	 *                                        constructed from the configured API key below.
 	 * @return true|WP_Error
 	 */
-	public static function apply_fix( $drift_id, $user_id ) {
+	public static function apply_fix( $drift_id, $user_id, WSR_Stripe_Client $client = null ) {
 		global $wpdb;
 		$table = $wpdb->prefix . 'wsr_drift_log';
 
@@ -117,15 +120,6 @@ class WSR_Fixer {
 			return new WP_Error( 'wsr_no_fix_for_type', __( 'No automated fix exists for this drift type — it can only be dismissed.', 'woo-stripe-reconcile' ) );
 		}
 
-		// A currently-disputed/under-review match is detected at
-		// severity=info specifically so no automated status change
-		// happens while that's active — see PROBLEM.md's corrected
-		// dispute-handling principle. Enforced again here, not just at
-		// detection time, since detection and fix are separate requests.
-		if ( 'info' === $row->severity ) {
-			return new WP_Error( 'wsr_disputed_no_fix', __( 'This order has an active dispute or Radar review — no automated fix is available while that\'s open.', 'woo-stripe-reconcile' ) );
-		}
-
 		if ( ! $row->order_id ) {
 			return new WP_Error( 'wsr_no_order', __( 'This drift record has no associated order.', 'woo-stripe-reconcile' ) );
 		}
@@ -139,7 +133,82 @@ class WSR_Fixer {
 			return new WP_Error( 'wsr_locked', __( 'This order is currently locked by the Stripe gateway\'s own webhook processing — try again in a few minutes.', 'woo-stripe-reconcile' ) );
 		}
 
-		$charge_id = $order->get_transaction_id();
+		// Bug fix (independent review, round 2): the only prior guard here
+		// was `severity === 'info'` — a snapshot written whenever the row
+		// was originally detected, possibly hours or days ago. PROBLEM.md's
+		// own stated highest-severity principle is "evaluate dispute/review
+		// state fresh from Stripe on every detection run — never as a
+		// cached or permanent flag," and this destructive path was doing
+		// exactly the opposite: a dispute or Radar review opened *after*
+		// detection left the row at high/critical severity with a live Fix
+		// button, and there was no re-check against Stripe at all before
+		// applying it. Re-fetch the PaymentIntent live and re-run the same
+		// check Pass A itself uses, right before acting — not the cached row.
+		if ( null === $client ) {
+			$api_key = WSR_Settings::get_api_key();
+			if ( '' === $api_key ) {
+				return new WP_Error( 'wsr_no_api_key', __( 'No Stripe API key is configured — cannot verify current state before fixing.', 'woo-stripe-reconcile' ) );
+			}
+			$client = new WSR_Stripe_Client( $api_key );
+		}
+
+		$pi = $client->get(
+			'payment_intents/' . rawurlencode( $row->stripe_object_id ),
+			array( 'expand' => array( 'latest_charge', 'latest_charge.dispute', 'latest_charge.review' ) )
+		);
+
+		if ( is_wp_error( $pi ) ) {
+			return new WP_Error(
+				'wsr_fix_verify_failed',
+				sprintf(
+					/* translators: %s: the underlying Stripe API error message */
+					__( 'Could not verify current Stripe state before fixing — refusing to act on a stale snapshot: %s', 'woo-stripe-reconcile' ),
+					$pi->get_error_message()
+				)
+			);
+		}
+
+		$live_drift = WSR_Reconciler::check_drift_still_applies( $order, $pi, $row->drift_type );
+
+		if ( null === $live_drift ) {
+			// No longer drifting — it self-healed since detection (e.g.
+			// another process's webhook or a prior fix already resolved
+			// it). Mark it resolved rather than either fixing something
+			// that isn't broken or leaving a stale open row behind.
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- no wpdb abstraction exists for this table.
+			$wpdb->update(
+				$table,
+				array(
+					'status'      => 'fixed',
+					'resolved_at' => current_time( 'mysql', true ),
+					'resolved_by' => 'system',
+				),
+				array( 'id' => $drift_id ),
+				array( '%s', '%s', '%s' ),
+				array( '%d' )
+			);
+			return new WP_Error( 'wsr_already_resolved', __( 'This order no longer shows as drifting against Stripe\'s current state — marked resolved automatically, no fix was needed.', 'woo-stripe-reconcile' ) );
+		}
+
+		if ( 'info' === $live_drift['severity'] ) {
+			// Currently disputed/under review right now — refuse, and
+			// refresh the row's own severity so the dashboard reflects
+			// this immediately rather than continuing to show a
+			// misleadingly actionable high/critical row until the next
+			// scheduled run.
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- no wpdb abstraction exists for this table.
+			$wpdb->update( $table, array( 'severity' => 'info' ), array( 'id' => $drift_id ), array( '%s' ), array( '%d' ) );
+			return new WP_Error( 'wsr_disputed_no_fix', __( 'This order currently has an active dispute or Radar review — no automated fix is available while that\'s open.', 'woo-stripe-reconcile' ) );
+		}
+
+		// Bug fix (independent review, round 2): the prior version used
+		// $order->get_transaction_id(), which is empty by definition for a
+		// stuck-pending order (it's only ever set by the webhook that
+		// already failed to process) — the order would be marked paid and
+		// captured with no Stripe charge reference at all, making it
+		// un-refundable from wp-admin. The just-fetched live PaymentIntent
+		// carries the real charge ID.
+		$charge_id = isset( $pi['latest_charge']['id'] ) ? $pi['latest_charge']['id'] : $order->get_transaction_id();
 
 		self::$applying_fix = true;
 		try {
