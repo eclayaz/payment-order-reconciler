@@ -1,4 +1,4 @@
-# Payment Order Reconciler for WooCommerce and Stripe
+# Payment Order Reconciler for Stripe
 
 A self-hosted WordPress plugin that reconciles Stripe payment state against WooCommerce order state — for stores using the third-party **WooCommerce Stripe Payment Gateway** plugin (not WooPayments).
 
@@ -44,7 +44,7 @@ Not yet published on WordPress.org — that submission is still pending (see `wp
 
 1. Copy (or clone) the `payment-order-reconciler/` directory into your site's `wp-content/plugins/`.
 2. Activate WooCommerce and the WooCommerce Stripe Payment Gateway first — the plugin refuses to activate (and deactivates itself if either is later turned off) without both.
-3. Activate **Payment Order Reconciler for WooCommerce and Stripe**.
+3. Activate **Payment Order Reconciler for Stripe**.
 
 ## Setup
 
