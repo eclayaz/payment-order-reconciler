@@ -40,7 +40,7 @@ If a restricted key with write access to anything ever seems necessary, that's a
 
 ## Installation
 
-This isn't published on WordPress.org (it's a private project) — install it manually:
+Not yet published on WordPress.org — that submission is still pending (see `wp-org-assets/` and `payment-order-reconciler/readme.txt`, which are already submission-ready). Until then, install it manually:
 
 1. Copy (or clone) the `payment-order-reconciler/` directory into your site's `wp-content/plugins/`.
 2. Activate WooCommerce and the WooCommerce Stripe Payment Gateway first — the plugin refuses to activate (and deactivates itself if either is later turned off) without both.
