@@ -10,7 +10,7 @@
  * Author:            eclayaz
  * License:           GPL-2.0-or-later
  * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
- * Text Domain:       payment-order-reconciler
+ * Text Domain:       payment-order-reconciler-for-stripe
  *
  * WC requires at least: 8.2
  * WC tested up to:      11.0
@@ -78,7 +78,7 @@ function wsr_missing_dependencies_notice() {
 			<?php
 			esc_html_e(
 				'Payment Order Reconciler for Stripe requires both WooCommerce and the "WooCommerce Stripe Payment Gateway" plugin to be active. It has been deactivated.',
-				'payment-order-reconciler'
+				'payment-order-reconciler-for-stripe'
 			);
 			?>
 		</p>
@@ -156,7 +156,7 @@ add_action(
 				<?php
 				esc_html_e(
 					'Payment Order Reconciler for Stripe could not be activated: both WooCommerce and the "WooCommerce Stripe Payment Gateway" plugin must be active first.',
-					'payment-order-reconciler'
+					'payment-order-reconciler-for-stripe'
 				);
 				?>
 			</p>

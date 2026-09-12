@@ -40,13 +40,13 @@ class WSR_Drift_List_Table extends WP_List_Table {
 		}
 
 		return $columns + array(
-			'order'    => __( 'Order', 'payment-order-reconciler' ),
-			'object'   => __( 'Stripe object', 'payment-order-reconciler' ),
-			'type'     => __( 'Type', 'payment-order-reconciler' ),
-			'severity' => __( 'Severity', 'payment-order-reconciler' ),
-			'states'   => __( 'Local → Stripe', 'payment-order-reconciler' ),
-			'seen'     => __( 'Detected', 'payment-order-reconciler' ),
-			'actions'  => __( 'Actions', 'payment-order-reconciler' ),
+			'order'    => __( 'Order', 'payment-order-reconciler-for-stripe' ),
+			'object'   => __( 'Stripe object', 'payment-order-reconciler-for-stripe' ),
+			'type'     => __( 'Type', 'payment-order-reconciler-for-stripe' ),
+			'severity' => __( 'Severity', 'payment-order-reconciler-for-stripe' ),
+			'states'   => __( 'Local → Stripe', 'payment-order-reconciler-for-stripe' ),
+			'seen'     => __( 'Detected', 'payment-order-reconciler-for-stripe' ),
+			'actions'  => __( 'Actions', 'payment-order-reconciler-for-stripe' ),
 		);
 	}
 
@@ -67,8 +67,8 @@ class WSR_Drift_List_Table extends WP_List_Table {
 			return array();
 		}
 		return array(
-			'wsr_bulk_fix'     => __( 'Fix', 'payment-order-reconciler' ),
-			'wsr_bulk_dismiss' => __( 'Dismiss', 'payment-order-reconciler' ),
+			'wsr_bulk_fix'     => __( 'Fix', 'payment-order-reconciler-for-stripe' ),
+			'wsr_bulk_dismiss' => __( 'Dismiss', 'payment-order-reconciler-for-stripe' ),
 		);
 	}
 
@@ -82,13 +82,13 @@ class WSR_Drift_List_Table extends WP_List_Table {
 		$table   = $wpdb->prefix . 'wsr_drift_log';
 		$current = $this->get_current_status();
 
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared -- $table is our own constant prefix.
-		$counts = $wpdb->get_results( "SELECT status, COUNT(*) as c FROM {$table} GROUP BY status", OBJECT_K );
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- %i escapes the table identifier.
+		$counts = $wpdb->get_results( $wpdb->prepare( 'SELECT status, COUNT(*) as c FROM %i GROUP BY status', $table ), OBJECT_K );
 
 		$labels = array(
-			'open'      => __( 'Open', 'payment-order-reconciler' ),
-			'fixed'     => __( 'Fixed', 'payment-order-reconciler' ),
-			'dismissed' => __( 'Dismissed', 'payment-order-reconciler' ),
+			'open'      => __( 'Open', 'payment-order-reconciler-for-stripe' ),
+			'fixed'     => __( 'Fixed', 'payment-order-reconciler-for-stripe' ),
+			'dismissed' => __( 'Dismissed', 'payment-order-reconciler-for-stripe' ),
 		);
 
 		$views = array();
@@ -115,17 +115,18 @@ class WSR_Drift_List_Table extends WP_List_Table {
 		$current_page = $this->get_pagenum();
 		$offset       = ( $current_page - 1 ) * self::PER_PAGE;
 
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared -- $table is our own constant prefix.
-		$total_items = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$table} WHERE status = %s", $status ) );
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- %i escapes the table identifier.
+		$total_items = (int) $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM %i WHERE status = %s', $table, $status ) );
 
 		$this->_column_headers = array( $this->get_columns(), array(), array() );
 
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared -- $table is our own constant prefix; $offset/PER_PAGE are ints from our own pagination.
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- %i escapes the table identifier; $offset/PER_PAGE are ints from our own pagination.
 		$this->items = $wpdb->get_results(
 			$wpdb->prepare(
-				"SELECT * FROM {$table} WHERE status = %s
+				"SELECT * FROM %i WHERE status = %s
 				 ORDER BY FIELD(severity, 'critical', 'high', 'info') ASC, detected_at DESC
 				 LIMIT %d OFFSET %d",
+				$table,
 				$status,
 				self::PER_PAGE,
 				$offset
@@ -155,7 +156,7 @@ class WSR_Drift_List_Table extends WP_List_Table {
 			case 'seen':
 				return sprintf(
 					/* translators: 1: human-readable time since detection, 2: number of times detected */
-					esc_html__( '%1$s ago (×%2$d)', 'payment-order-reconciler' ),
+					esc_html__( '%1$s ago (×%2$d)', 'payment-order-reconciler-for-stripe' ),
 					esc_html( human_time_diff( strtotime( $item->detected_at . ' UTC' ), time() ) ),
 					(int) $item->detection_count
 				);
@@ -234,11 +235,11 @@ class WSR_Drift_List_Table extends WP_List_Table {
 			$actions[] = sprintf(
 				'<a class="button button-small button-primary" href="%s" onclick="return confirm(%s);">%s</a>',
 				esc_url( $fix_url ),
-				esc_attr( wp_json_encode( __( 'Mark this order as paid and completed based on Stripe\'s current record? This emails the customer and cannot be undone from here.', 'payment-order-reconciler' ) ) ),
-				esc_html__( 'Fix', 'payment-order-reconciler' )
+				esc_attr( wp_json_encode( __( 'Mark this order as paid and completed based on Stripe\'s current record? This emails the customer and cannot be undone from here.', 'payment-order-reconciler-for-stripe' ) ) ),
+				esc_html__( 'Fix', 'payment-order-reconciler-for-stripe' )
 			);
 		} elseif ( 'info' === $item->severity ) {
-			$actions[] = '<span class="description">' . esc_html__( 'No fix while disputed/under review', 'payment-order-reconciler' ) . '</span>';
+			$actions[] = '<span class="description">' . esc_html__( 'No fix while disputed/under review', 'payment-order-reconciler-for-stripe' ) . '</span>';
 		}
 
 		$dismiss_url = wp_nonce_url(
@@ -251,12 +252,12 @@ class WSR_Drift_List_Table extends WP_List_Table {
 			),
 			WSR_Fixer::dismiss_nonce_action( $item->id )
 		);
-		$actions[] = sprintf( '<a class="button button-small" href="%s">%s</a>', esc_url( $dismiss_url ), esc_html__( 'Dismiss', 'payment-order-reconciler' ) );
+		$actions[] = sprintf( '<a class="button button-small" href="%s">%s</a>', esc_url( $dismiss_url ), esc_html__( 'Dismiss', 'payment-order-reconciler-for-stripe' ) );
 
 		return implode( ' ', $actions ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- each entry already escaped when built above.
 	}
 
 	public function no_items() {
-		esc_html_e( 'No drift in this category.', 'payment-order-reconciler' );
+		esc_html_e( 'No drift in this category.', 'payment-order-reconciler-for-stripe' );
 	}
 }

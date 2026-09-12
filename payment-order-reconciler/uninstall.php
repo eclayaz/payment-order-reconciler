@@ -44,5 +44,5 @@ foreach ( $options as $option ) {
 // regardless of which hook scheduled it (see ActionScheduler's own
 // as_unschedule_all_actions()).
 if ( function_exists( 'as_unschedule_all_actions' ) ) {
-	as_unschedule_all_actions( '', array(), 'payment-order-reconciler' );
+	as_unschedule_all_actions( '', array(), 'payment-order-reconciler-for-stripe' );
 }

@@ -25,7 +25,7 @@ class WSR_Audit_Log {
 
 	public static function register_exporter( $exporters ) {
 		$exporters[ self::EXPORTER_ERASER_ID ] = array(
-			'exporter_friendly_name' => __( 'Payment Order Reconciler', 'payment-order-reconciler' ),
+			'exporter_friendly_name' => __( 'Payment Order Reconciler', 'payment-order-reconciler-for-stripe' ),
 			'callback'               => array( __CLASS__, 'export_data' ),
 		);
 		return $exporters;
@@ -33,7 +33,7 @@ class WSR_Audit_Log {
 
 	public static function register_eraser( $erasers ) {
 		$erasers[ self::EXPORTER_ERASER_ID ] = array(
-			'eraser_friendly_name' => __( 'Payment Order Reconciler', 'payment-order-reconciler' ),
+			'eraser_friendly_name' => __( 'Payment Order Reconciler', 'payment-order-reconciler-for-stripe' ),
 			'callback'              => array( __CLASS__, 'erase_data' ),
 		);
 		return $erasers;
@@ -66,33 +66,33 @@ class WSR_Audit_Log {
 			$table        = $wpdb->prefix . 'wsr_drift_log';
 			$placeholders = implode( ',', array_fill( 0, count( $order_ids ), '%d' ) );
 
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared -- $table is our own constant prefix, $placeholders is a fixed count of %d tokens.
-			$rows = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table} WHERE order_id IN ({$placeholders})", $order_ids ) );
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- %i escapes the table identifier; $placeholders is a fixed count of %d tokens, values bound via prepare() below.
+			$rows = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM %i WHERE order_id IN ({$placeholders})", array_merge( array( $table ), $order_ids ) ) ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- {$placeholders} is a fixed-count string of literal %d tokens, not a value.
 
 			foreach ( $rows as $row ) {
 				$export_items[] = array(
 					'group_id'    => 'woo-stripe-reconcile-drift',
-					'group_label' => __( 'Payment Reconciliation Records', 'payment-order-reconciler' ),
+					'group_label' => __( 'Payment Reconciliation Records', 'payment-order-reconciler-for-stripe' ),
 					'item_id'     => 'wsr-drift-' . $row->id,
 					'data'        => array(
 						array(
-							'name'  => __( 'Order', 'payment-order-reconciler' ),
+							'name'  => __( 'Order', 'payment-order-reconciler-for-stripe' ),
 							'value' => '#' . $row->order_id,
 						),
 						array(
-							'name'  => __( 'Stripe object', 'payment-order-reconciler' ),
+							'name'  => __( 'Stripe object', 'payment-order-reconciler-for-stripe' ),
 							'value' => $row->stripe_object_id,
 						),
 						array(
-							'name'  => __( 'Drift type', 'payment-order-reconciler' ),
+							'name'  => __( 'Drift type', 'payment-order-reconciler-for-stripe' ),
 							'value' => $row->drift_type,
 						),
 						array(
-							'name'  => __( 'Status', 'payment-order-reconciler' ),
+							'name'  => __( 'Status', 'payment-order-reconciler-for-stripe' ),
 							'value' => $row->status,
 						),
 						array(
-							'name'  => __( 'First detected', 'payment-order-reconciler' ),
+							'name'  => __( 'First detected', 'payment-order-reconciler-for-stripe' ),
 							'value' => $row->first_detected_at,
 						),
 					),
@@ -115,8 +115,8 @@ class WSR_Audit_Log {
 			$table        = $wpdb->prefix . 'wsr_drift_log';
 			$placeholders = implode( ',', array_fill( 0, count( $order_ids ), '%d' ) );
 
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared -- $table is our own constant prefix, $placeholders is a fixed count of %d tokens.
-			$deleted       = $wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE order_id IN ({$placeholders})", $order_ids ) );
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- %i escapes the table identifier; $placeholders is a fixed count of %d tokens, values bound via prepare() below.
+			$deleted       = $wpdb->query( $wpdb->prepare( "DELETE FROM %i WHERE order_id IN ({$placeholders})", array_merge( array( $table ), $order_ids ) ) ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- {$placeholders} is a fixed-count string of literal %d tokens, not a value.
 			$items_removed = $deleted > 0;
 		}
 

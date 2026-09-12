@@ -20,8 +20,8 @@ class WSR_Admin_Dashboard {
 	public static function register_menu() {
 		add_submenu_page(
 			'woocommerce',
-			__( 'Payment Reconciliation', 'payment-order-reconciler' ),
-			__( 'Payment Reconciliation', 'payment-order-reconciler' ),
+			__( 'Payment Reconciliation', 'payment-order-reconciler-for-stripe' ),
+			__( 'Payment Reconciliation', 'payment-order-reconciler-for-stripe' ),
 			self::CAPABILITY,
 			'wsr-dashboard',
 			array( __CLASS__, 'render_page' )
@@ -48,7 +48,7 @@ class WSR_Admin_Dashboard {
 
 		?>
 		<div class="wrap">
-			<h1><?php esc_html_e( 'Payment Reconciliation', 'payment-order-reconciler' ); ?></h1>
+			<h1><?php esc_html_e( 'Payment Reconciliation', 'payment-order-reconciler-for-stripe' ); ?></h1>
 			<?php self::render_notice( $notice ); ?>
 			<?php
 			// Bug fix (independent review, round 2): TECHNICAL_SPEC.md
@@ -92,7 +92,7 @@ class WSR_Admin_Dashboard {
 		foreach ( array( 'action', 'action2' ) as $key ) {
 			// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- only used to select which branch to take; check_admin_referer() below is the actual verification, before any effectful action.
 			if ( isset( $_REQUEST[ $key ] ) && in_array( $_REQUEST[ $key ], array( 'wsr_bulk_fix', 'wsr_bulk_dismiss' ), true ) ) {
-				$action = $_REQUEST[ $key ]; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- validated by the in_array() whitelist check just above.
+				$action = $_REQUEST[ $key ]; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized, WordPress.Security.NonceVerification.Recommended -- validated by the in_array() whitelist check just above; check_admin_referer() below is the actual verification, before any effectful action.
 				break;
 			}
 		}
@@ -103,7 +103,7 @@ class WSR_Admin_Dashboard {
 		check_admin_referer( 'bulk-drifts' );
 
 		if ( ! current_user_can( self::CAPABILITY ) ) {
-			wp_die( esc_html__( 'You do not have permission to do this.', 'payment-order-reconciler' ) );
+			wp_die( esc_html__( 'You do not have permission to do this.', 'payment-order-reconciler-for-stripe' ) );
 		}
 
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- verified by check_admin_referer() just above.
@@ -146,7 +146,7 @@ class WSR_Admin_Dashboard {
 	 */
 	private static function render_bulk_fix_confirm_script() {
 		$message = wp_json_encode(
-			__( 'Mark the selected orders as paid and completed based on Stripe\'s current record? This emails each customer and cannot be undone from here.', 'payment-order-reconciler' )
+			__( 'Mark the selected orders as paid and completed based on Stripe\'s current record? This emails each customer and cannot be undone from here.', 'payment-order-reconciler-for-stripe' )
 		);
 		?>
 		<script>
@@ -176,8 +176,8 @@ class WSR_Admin_Dashboard {
 
 	private static function render_notice( $notice ) {
 		$messages = array(
-			'fix_applied' => array( 'success', __( 'Fix applied — the order status was synced to Stripe\'s record.', 'payment-order-reconciler' ) ),
-			'dismissed'   => array( 'success', __( 'Drift dismissed. It will not reappear unless it recurs after being fixed.', 'payment-order-reconciler' ) ),
+			'fix_applied' => array( 'success', __( 'Fix applied — the order status was synced to Stripe\'s record.', 'payment-order-reconciler-for-stripe' ) ),
+			'dismissed'   => array( 'success', __( 'Drift dismissed. It will not reappear unless it recurs after being fixed.', 'payment-order-reconciler-for-stripe' ) ),
 			'fix_error'   => array( 'error', self::get_fix_error_message() ),
 		);
 
@@ -202,18 +202,18 @@ class WSR_Admin_Dashboard {
 		$ok = isset( $_GET['wsr_ok'] ) ? absint( $_GET['wsr_ok'] ) : 0;
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- see above.
 		$failed = isset( $_GET['wsr_failed'] ) ? absint( $_GET['wsr_failed'] ) : 0;
-		$verb   = 'bulk_fixed' === $notice ? __( 'fixed', 'payment-order-reconciler' ) : __( 'dismissed', 'payment-order-reconciler' );
+		$verb   = 'bulk_fixed' === $notice ? __( 'fixed', 'payment-order-reconciler-for-stripe' ) : __( 'dismissed', 'payment-order-reconciler-for-stripe' );
 
 		$text = sprintf(
 			/* translators: 1: number succeeded, 2: "fixed" or "dismissed" */
-			_n( '%1$d row %2$s.', '%1$d rows %2$s.', $ok, 'payment-order-reconciler' ),
+			_n( '%1$d row %2$s.', '%1$d rows %2$s.', $ok, 'payment-order-reconciler-for-stripe' ),
 			$ok,
 			$verb
 		);
 		if ( $failed > 0 ) {
 			$text .= ' ' . sprintf(
 				/* translators: %d: number that could not be processed */
-				_n( '%d could not be processed — try it individually to see why (still-disputed, locked, or already resolved are the usual reasons).', '%d could not be processed — try each individually to see why (still-disputed, locked, or already resolved are the usual reasons).', $failed, 'payment-order-reconciler' ),
+				_n( '%d could not be processed — try it individually to see why (still-disputed, locked, or already resolved are the usual reasons).', '%d could not be processed — try each individually to see why (still-disputed, locked, or already resolved are the usual reasons).', $failed, 'payment-order-reconciler-for-stripe' ),
 				$failed
 			);
 		}
@@ -223,6 +223,6 @@ class WSR_Admin_Dashboard {
 
 	private static function get_fix_error_message() {
 		$message = get_transient( 'wsr_fix_error_' . get_current_user_id() );
-		return $message ? $message : __( 'The fix could not be applied.', 'payment-order-reconciler' );
+		return $message ? $message : __( 'The fix could not be applied.', 'payment-order-reconciler-for-stripe' );
 	}
 }
