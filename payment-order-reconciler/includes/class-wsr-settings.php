@@ -35,7 +35,7 @@ class WSR_Settings {
 	 */
 	public static function handle_save_alert_email() {
 		if ( ! current_user_can( self::CAPABILITY ) ) {
-			wp_die( esc_html__( 'You do not have permission to do this.', 'stripe-order-reconciler' ) );
+			wp_die( esc_html__( 'You do not have permission to do this.', 'payment-order-reconciler' ) );
 		}
 		check_admin_referer( self::NONCE_ACTION_ALERT_EMAIL );
 
@@ -49,8 +49,8 @@ class WSR_Settings {
 	public static function register_menu() {
 		add_submenu_page(
 			'woocommerce',
-			__( 'Stripe Reconciler', 'stripe-order-reconciler' ),
-			__( 'Stripe Reconciler', 'stripe-order-reconciler' ),
+			__( 'Payment Reconciler', 'payment-order-reconciler' ),
+			__( 'Payment Reconciler', 'payment-order-reconciler' ),
 			self::CAPABILITY,
 			'wsr-settings',
 			array( __CLASS__, 'render_page' )
@@ -101,7 +101,7 @@ class WSR_Settings {
 
 	public static function handle_save() {
 		if ( ! current_user_can( self::CAPABILITY ) ) {
-			wp_die( esc_html__( 'You do not have permission to do this.', 'stripe-order-reconciler' ) );
+			wp_die( esc_html__( 'You do not have permission to do this.', 'payment-order-reconciler' ) );
 		}
 		check_admin_referer( self::NONCE_ACTION );
 
@@ -154,7 +154,7 @@ class WSR_Settings {
 	 */
 	public static function handle_run_pass_a() {
 		if ( ! current_user_can( self::CAPABILITY ) ) {
-			wp_die( esc_html__( 'You do not have permission to do this.', 'stripe-order-reconciler' ) );
+			wp_die( esc_html__( 'You do not have permission to do this.', 'payment-order-reconciler' ) );
 		}
 		check_admin_referer( self::NONCE_ACTION_RUN );
 
@@ -191,11 +191,11 @@ class WSR_Settings {
 		$looks_dev   = 'production' !== $env_type || (bool) preg_match( '/\.(local|test)$|localhost|staging|\bdev\b/i', (string) $host );
 
 		if ( ! $is_test_key && $looks_dev ) {
-			return __( 'This looks like a non-production site, but a LIVE restricted key (rk_live_...) is configured. Double-check that\'s intentional — reconciliation checks would run against real payment data.', 'stripe-order-reconciler' );
+			return __( 'This looks like a non-production site, but a LIVE restricted key (rk_live_...) is configured. Double-check that\'s intentional — reconciliation checks would run against real payment data.', 'payment-order-reconciler' );
 		}
 
 		if ( $is_test_key && 'production' === $env_type && ! $looks_dev ) {
-			return __( 'This looks like a production site, but a TEST restricted key (rk_test_...) is configured — reconciliation checks will run against sandbox data, not real payments, until a live key is set.', 'stripe-order-reconciler' );
+			return __( 'This looks like a production site, but a TEST restricted key (rk_test_...) is configured — reconciliation checks will run against sandbox data, not real payments, until a live key is set.', 'payment-order-reconciler' );
 		}
 
 		return '';
@@ -215,7 +215,7 @@ class WSR_Settings {
 
 		?>
 		<div class="wrap">
-			<h1><?php esc_html_e( 'Stripe Reconciler — Settings', 'stripe-order-reconciler' ); ?></h1>
+			<h1><?php esc_html_e( 'Payment Reconciler — Settings', 'payment-order-reconciler' ); ?></h1>
 
 			<?php self::render_notice( $notice ); ?>
 
@@ -227,7 +227,7 @@ class WSR_Settings {
 				<?php
 				esc_html_e(
 					'Paste a Stripe restricted, read-only API key here. It should never have permission to charge, refund, or move money — only to read PaymentIntents, Charges, Checkout Sessions, Events, Webhook Endpoints, Disputes, and Reviews. Create one in Stripe under Developers → API keys → Create restricted key, setting exactly those seven resources to Read and everything else to None.',
-					'stripe-order-reconciler'
+					'payment-order-reconciler'
 				);
 				?>
 			</p>
@@ -238,7 +238,7 @@ class WSR_Settings {
 						<?php
 						printf(
 							/* translators: %s: wp-config.php constant name, as a <code> tag */
-							esc_html__( 'This key is set via the %s constant in wp-config.php and cannot be changed here.', 'stripe-order-reconciler' ),
+							esc_html__( 'This key is set via the %s constant in wp-config.php and cannot be changed here.', 'payment-order-reconciler' ),
 							'<code>' . esc_html( self::KEY_CONSTANT ) . '</code>' // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- constant tag is our own literal string, already escaped.
 						);
 						?>
@@ -251,7 +251,7 @@ class WSR_Settings {
 					<table class="form-table">
 						<tr>
 							<th scope="row">
-								<label for="wsr_api_key"><?php esc_html_e( 'Restricted API key', 'stripe-order-reconciler' ); ?></label>
+								<label for="wsr_api_key"><?php esc_html_e( 'Restricted API key', 'payment-order-reconciler' ); ?></label>
 							</th>
 							<td>
 								<input
@@ -263,22 +263,22 @@ class WSR_Settings {
 									placeholder="<?php echo esc_attr( $masked_key ? $masked_key : 'rk_live_... or rk_test_...' ); ?>"
 								/>
 								<p class="description">
-									<?php esc_html_e( 'Leave blank and save to remove the currently configured key.', 'stripe-order-reconciler' ); ?>
+									<?php esc_html_e( 'Leave blank and save to remove the currently configured key.', 'payment-order-reconciler' ); ?>
 								</p>
 							</td>
 						</tr>
 					</table>
-					<?php submit_button( __( 'Save & Validate', 'stripe-order-reconciler' ) ); ?>
+					<?php submit_button( __( 'Save & Validate', 'payment-order-reconciler' ) ); ?>
 				</form>
 			<?php endif; ?>
 
 			<?php if ( ! empty( $scope_status ) ) : ?>
-				<h2><?php esc_html_e( 'Scope check results', 'stripe-order-reconciler' ); ?></h2>
+				<h2><?php esc_html_e( 'Scope check results', 'payment-order-reconciler' ); ?></h2>
 				<table class="widefat" style="max-width: 640px;">
 					<thead>
 						<tr>
-							<th><?php esc_html_e( 'Scope', 'stripe-order-reconciler' ); ?></th>
-							<th><?php esc_html_e( 'Status', 'stripe-order-reconciler' ); ?></th>
+							<th><?php esc_html_e( 'Scope', 'payment-order-reconciler' ); ?></th>
+							<th><?php esc_html_e( 'Status', 'payment-order-reconciler' ); ?></th>
 						</tr>
 					</thead>
 					<tbody>
@@ -287,7 +287,7 @@ class WSR_Settings {
 							<td><?php echo esc_html( $scope ); ?></td>
 							<td>
 								<?php if ( true === $result ) : ?>
-									<span style="color:#1a7f37;">&#10003; <?php esc_html_e( 'OK', 'stripe-order-reconciler' ); ?></span>
+									<span style="color:#1a7f37;">&#10003; <?php esc_html_e( 'OK', 'payment-order-reconciler' ); ?></span>
 								<?php else : ?>
 									<span style="color:#b32d2e;">&#10007; <?php echo esc_html( $result ); ?></span>
 								<?php endif; ?>
@@ -297,41 +297,41 @@ class WSR_Settings {
 					</tbody>
 				</table>
 				<p class="description">
-					<?php esc_html_e( 'If any scope failed, edit the restricted key in your Stripe Dashboard (Developers → API keys) to add the missing permission, then save again here.', 'stripe-order-reconciler' ); ?>
+					<?php esc_html_e( 'If any scope failed, edit the restricted key in your Stripe Dashboard (Developers → API keys) to add the missing permission, then save again here.', 'payment-order-reconciler' ); ?>
 				</p>
 			<?php endif; ?>
 
 			<?php if ( $current_key ) : ?>
 				<hr />
-				<h2><?php esc_html_e( 'Alerts', 'stripe-order-reconciler' ); ?></h2>
+				<h2><?php esc_html_e( 'Alerts', 'payment-order-reconciler' ); ?></h2>
 				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
 					<?php wp_nonce_field( self::NONCE_ACTION_ALERT_EMAIL ); ?>
 					<input type="hidden" name="action" value="wsr_save_alert_email" />
 					<table class="form-table">
 						<tr>
-							<th scope="row"><label for="wsr_alert_email"><?php esc_html_e( 'Alert email', 'stripe-order-reconciler' ); ?></label></th>
+							<th scope="row"><label for="wsr_alert_email"><?php esc_html_e( 'Alert email', 'payment-order-reconciler' ); ?></label></th>
 							<td>
 								<input type="email" id="wsr_alert_email" name="wsr_alert_email" class="regular-text"
 									value="<?php echo esc_attr( get_option( WSR_Email_Alerts::OPTION_ALERT_EMAIL, '' ) ); ?>"
 									placeholder="<?php echo esc_attr( get_option( 'admin_email' ) ); ?>" />
-								<p class="description"><?php esc_html_e( 'Sent one email per run when new high/critical-severity drift is found. Leave blank to use the site admin email.', 'stripe-order-reconciler' ); ?></p>
+								<p class="description"><?php esc_html_e( 'Sent one email per run when new high/critical-severity drift is found. Leave blank to use the site admin email.', 'payment-order-reconciler' ); ?></p>
 							</td>
 						</tr>
 					</table>
-					<?php submit_button( __( 'Save', 'stripe-order-reconciler' ), 'secondary' ); ?>
+					<?php submit_button( __( 'Save', 'payment-order-reconciler' ), 'secondary' ); ?>
 				</form>
 
 				<hr />
 				<?php self::render_coverage_status(); ?>
 
-				<h2><?php esc_html_e( 'Manual reconciliation', 'stripe-order-reconciler' ); ?></h2>
+				<h2><?php esc_html_e( 'Manual reconciliation', 'payment-order-reconciler' ); ?></h2>
 				<p class="description">
-					<?php esc_html_e( 'Runs the same three steps the daily scheduled job runs: Pass A (reconciliation), Pass B (undelivered-webhook diagnostic), and the webhook endpoint health-check — useful right after saving a key, or any time you don\'t want to wait for the next scheduled run. See the Drift Log dashboard for results.', 'stripe-order-reconciler' ); ?>
+					<?php esc_html_e( 'Runs the same three steps the daily scheduled job runs: Pass A (reconciliation), Pass B (undelivered-webhook diagnostic), and the webhook endpoint health-check — useful right after saving a key, or any time you don\'t want to wait for the next scheduled run. See the Drift Log dashboard for results.', 'payment-order-reconciler' ); ?>
 				</p>
 				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
 					<?php wp_nonce_field( self::NONCE_ACTION_RUN ); ?>
 					<input type="hidden" name="action" value="wsr_run_pass_a" />
-					<?php submit_button( __( 'Run reconciliation now', 'stripe-order-reconciler' ), 'secondary' ); ?>
+					<?php submit_button( __( 'Run reconciliation now', 'payment-order-reconciler' ), 'secondary' ); ?>
 				</form>
 
 				<?php self::render_pass_a_result(); ?>
@@ -352,7 +352,7 @@ class WSR_Settings {
 		$pass_b           = get_option( 'wsr_last_pass_b_result', array() );
 		$webhook_health   = get_option( 'wsr_last_webhook_health_result', array() );
 
-		echo '<h3>' . esc_html__( 'Coverage', 'stripe-order-reconciler' ) . '</h3>';
+		echo '<h3>' . esc_html__( 'Coverage', 'payment-order-reconciler' ) . '</h3>';
 
 		// Bug fix (independent review, round 2): wsr_last_run_at is now
 		// written only on a genuinely successful run (see run_all()) — a
@@ -367,46 +367,46 @@ class WSR_Settings {
 			echo '<p><span style="color:#b32d2e;">&#9679;</span> ';
 			printf(
 				/* translators: 1: human-readable time difference, e.g. "3 hours", 2: the underlying error message */
-				esc_html__( 'Last run attempt failed %1$s ago: %2$s', 'stripe-order-reconciler' ),
+				esc_html__( 'Last run attempt failed %1$s ago: %2$s', 'payment-order-reconciler' ),
 				esc_html( human_time_diff( strtotime( $last_run_failure['at'] . ' UTC' ), time() ) ),
 				esc_html( $last_run_failure['error'] )
 			);
 			echo '</p>';
 		} elseif ( '' === $last_run_at ) {
-			echo '<p><span style="color:#b32d2e;">&#9679;</span> ' . esc_html__( 'No reconciliation run has completed yet.', 'stripe-order-reconciler' ) . '</p>';
+			echo '<p><span style="color:#b32d2e;">&#9679;</span> ' . esc_html__( 'No reconciliation run has completed yet.', 'payment-order-reconciler' ) . '</p>';
 		} else {
 			$hours_ago = ( time() - strtotime( $last_run_at . ' UTC' ) ) / HOUR_IN_SECONDS;
 			$color     = $hours_ago < 36 ? '#1a7f37' : '#b32d2e'; // daily job + a margin before flagging as stale.
 			echo '<p><span style="color:' . esc_attr( $color ) . ';">&#9679;</span> ';
 			printf(
 				/* translators: %s: human-readable time difference, e.g. "3 hours" */
-				esc_html__( 'Last successful run: %s ago.', 'stripe-order-reconciler' ),
+				esc_html__( 'Last successful run: %s ago.', 'payment-order-reconciler' ),
 				esc_html( human_time_diff( strtotime( $last_run_at . ' UTC' ), time() ) )
 			);
 			echo '</p>';
 		}
 
 		if ( isset( $webhook_health['error'] ) ) {
-			echo '<p><span style="color:#b32d2e;">&#9679;</span> ' . esc_html__( 'Webhook health check failed: ', 'stripe-order-reconciler' ) . esc_html( $webhook_health['error'] ) . '</p>';
+			echo '<p><span style="color:#b32d2e;">&#9679;</span> ' . esc_html__( 'Webhook health check failed: ', 'payment-order-reconciler' ) . esc_html( $webhook_health['error'] ) . '</p>';
 		} elseif ( ! empty( $webhook_health ) ) {
 			if ( ! empty( $webhook_health['no_endpoints_configured'] ) ) {
-				echo '<p><span style="color:#b32d2e;">&#9679;</span> ' . esc_html__( 'No enabled webhook endpoints found in Stripe at all — this store cannot receive any payment notifications.', 'stripe-order-reconciler' ) . '</p>';
+				echo '<p><span style="color:#b32d2e;">&#9679;</span> ' . esc_html__( 'No enabled webhook endpoints found in Stripe at all — this store cannot receive any payment notifications.', 'payment-order-reconciler' ) . '</p>';
 			} elseif ( empty( $webhook_health['matching_endpoint_found'] ) ) {
-				echo '<p><span style="color:#b32d2e;">&#9679;</span> ' . esc_html__( 'None of the enabled webhook endpoints in Stripe point at this site\'s URL — likely the stale-endpoint problem this plugin exists to catch. Mismatched URLs: ', 'stripe-order-reconciler' )
+				echo '<p><span style="color:#b32d2e;">&#9679;</span> ' . esc_html__( 'None of the enabled webhook endpoints in Stripe point at this site\'s URL — likely the stale-endpoint problem this plugin exists to catch. Mismatched URLs: ', 'payment-order-reconciler' )
 					. esc_html( implode( ', ', $webhook_health['mismatched_endpoint_urls'] ) ) . '</p>';
 			} else {
-				echo '<p><span style="color:#1a7f37;">&#9679;</span> ' . esc_html__( 'A webhook endpoint matching this site was found and is enabled.', 'stripe-order-reconciler' ) . '</p>';
+				echo '<p><span style="color:#1a7f37;">&#9679;</span> ' . esc_html__( 'A webhook endpoint matching this site was found and is enabled.', 'payment-order-reconciler' ) . '</p>';
 			}
 		}
 
 		if ( isset( $pass_b['error'] ) ) {
-			echo '<p><span style="color:#b32d2e;">&#9679;</span> ' . esc_html__( 'Undelivered-events check failed: ', 'stripe-order-reconciler' ) . esc_html( $pass_b['error'] ) . '</p>';
+			echo '<p><span style="color:#b32d2e;">&#9679;</span> ' . esc_html__( 'Undelivered-events check failed: ', 'payment-order-reconciler' ) . esc_html( $pass_b['error'] ) . '</p>';
 		} elseif ( isset( $pass_b['undelivered_count'] ) ) {
 			$color = $pass_b['undelivered_count'] > 0 ? '#b32d2e' : '#1a7f37';
 			echo '<p><span style="color:' . esc_attr( $color ) . ';">&#9679;</span> ';
 			printf(
 				/* translators: %d: number of events that failed webhook delivery in the last 30 days */
-				esc_html__( '%d event(s) failed webhook delivery in the last 30 days.', 'stripe-order-reconciler' ),
+				esc_html__( '%d event(s) failed webhook delivery in the last 30 days.', 'payment-order-reconciler' ),
 				(int) $pass_b['undelivered_count']
 			);
 			echo '</p>';
@@ -427,24 +427,24 @@ class WSR_Settings {
 
 		$pass_a = $result['pass_a'];
 		if ( is_wp_error( $pass_a ) ) {
-			echo '<div class="notice notice-error inline"><p>' . esc_html__( 'Pass A failed: ', 'stripe-order-reconciler' ) . esc_html( $pass_a->get_error_message() ) . '</p></div>';
+			echo '<div class="notice notice-error inline"><p>' . esc_html__( 'Pass A failed: ', 'payment-order-reconciler' ) . esc_html( $pass_a->get_error_message() ) . '</p></div>';
 			return;
 		}
 
 		$labels = array(
-			'payment_intents_scanned'   => __( 'PaymentIntents scanned', 'stripe-order-reconciler' ),
-			'resolved_to_order'         => __( 'Resolved to a local order', 'stripe-order-reconciler' ),
-			'no_drift'                  => __( 'Resolved, no drift found', 'stripe-order-reconciler' ),
-			'stuck_pending_flagged'     => __( 'Stuck-pending flagged', 'stripe-order-reconciler' ),
-			'wrongly_cancelled_flagged' => __( 'Wrongly-cancelled-paid flagged', 'stripe-order-reconciler' ),
-			'needs_review'              => __( 'Needs review (unresolved)', 'stripe-order-reconciler' ),
-			'orphaned_charge_escalated' => __( 'Escalated to orphaned charge', 'stripe-order-reconciler' ),
-			'skipped_other_site'        => __( 'Skipped (belongs to another site)', 'stripe-order-reconciler' ),
-			'skipped_too_fresh'         => __( 'Skipped (too fresh, revisit next run)', 'stripe-order-reconciler' ),
-			'pages_fetched'             => __( 'API pages fetched', 'stripe-order-reconciler' ),
+			'payment_intents_scanned'   => __( 'PaymentIntents scanned', 'payment-order-reconciler' ),
+			'resolved_to_order'         => __( 'Resolved to a local order', 'payment-order-reconciler' ),
+			'no_drift'                  => __( 'Resolved, no drift found', 'payment-order-reconciler' ),
+			'stuck_pending_flagged'     => __( 'Stuck-pending flagged', 'payment-order-reconciler' ),
+			'wrongly_cancelled_flagged' => __( 'Wrongly-cancelled-paid flagged', 'payment-order-reconciler' ),
+			'needs_review'              => __( 'Needs review (unresolved)', 'payment-order-reconciler' ),
+			'orphaned_charge_escalated' => __( 'Escalated to orphaned charge', 'payment-order-reconciler' ),
+			'skipped_other_site'        => __( 'Skipped (belongs to another site)', 'payment-order-reconciler' ),
+			'skipped_too_fresh'         => __( 'Skipped (too fresh, revisit next run)', 'payment-order-reconciler' ),
+			'pages_fetched'             => __( 'API pages fetched', 'payment-order-reconciler' ),
 		);
 
-		echo '<h3>' . esc_html__( 'Last run results — Pass A', 'stripe-order-reconciler' ) . '</h3>';
+		echo '<h3>' . esc_html__( 'Last run results — Pass A', 'payment-order-reconciler' ) . '</h3>';
 		echo '<table class="widefat" style="max-width: 480px;"><tbody>';
 		foreach ( $labels as $key => $label ) {
 			if ( ! isset( $pass_a[ $key ] ) ) {
@@ -461,16 +461,16 @@ class WSR_Settings {
 
 	private static function render_notice( $notice ) {
 		$messages = array(
-			'saved'              => array( 'success', __( 'Key saved. See scope check results below.', 'stripe-order-reconciler' ) ),
-			'cleared'            => array( 'success', __( 'Key removed.', 'stripe-order-reconciler' ) ),
+			'saved'              => array( 'success', __( 'Key saved. See scope check results below.', 'payment-order-reconciler' ) ),
+			'cleared'            => array( 'success', __( 'Key removed.', 'payment-order-reconciler' ) ),
 			'not_restricted_key' => array(
 				'error',
-				__( 'That doesn\'t look like a restricted key (should start with rk_live_ or rk_test_). A regular secret key (sk_...) has full write access and is not supported by this plugin — create a restricted, read-only key instead.', 'stripe-order-reconciler' ),
+				__( 'That doesn\'t look like a restricted key (should start with rk_live_ or rk_test_). A regular secret key (sk_...) has full write access and is not supported by this plugin — create a restricted, read-only key instead.', 'payment-order-reconciler' ),
 			),
-			'constant_locked'    => array( 'error', __( 'The API key is locked via wp-config.php and cannot be changed from this screen.', 'stripe-order-reconciler' ) ),
-			'pass_a_ran'         => array( 'success', __( 'Reconciliation run complete. See results below.', 'stripe-order-reconciler' ) ),
+			'constant_locked'    => array( 'error', __( 'The API key is locked via wp-config.php and cannot be changed from this screen.', 'payment-order-reconciler' ) ),
+			'pass_a_ran'         => array( 'success', __( 'Reconciliation run complete. See results below.', 'payment-order-reconciler' ) ),
 			'pass_a_error'       => array( 'error', self::get_pass_a_error_message() ),
-			'alert_email_saved' => array( 'success', __( 'Alert email saved.', 'stripe-order-reconciler' ) ),
+			'alert_email_saved' => array( 'success', __( 'Alert email saved.', 'payment-order-reconciler' ) ),
 		);
 
 		if ( isset( $messages[ $notice ] ) ) {
@@ -483,8 +483,8 @@ class WSR_Settings {
 		$message = get_transient( 'wsr_pass_a_error_' . get_current_user_id() );
 		return $message ? sprintf(
 			/* translators: %s: the underlying error message */
-			__( 'Reconciliation run failed: %s', 'stripe-order-reconciler' ),
+			__( 'Reconciliation run failed: %s', 'payment-order-reconciler' ),
 			$message
-		) : __( 'Reconciliation run failed.', 'stripe-order-reconciler' );
+		) : __( 'Reconciliation run failed.', 'payment-order-reconciler' );
 	}
 }

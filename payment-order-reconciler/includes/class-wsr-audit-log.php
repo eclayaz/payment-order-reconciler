@@ -13,7 +13,7 @@ defined( 'ABSPATH' ) || exit;
 
 class WSR_Audit_Log {
 
-	const EXPORTER_ERASER_ID = 'stripe-order-reconciler';
+	const EXPORTER_ERASER_ID = 'payment-order-reconciler';
 
 	/** Matches WordPress core's own page size convention for privacy exporters/erasers. */
 	const PAGE_SIZE = 50;
@@ -25,7 +25,7 @@ class WSR_Audit_Log {
 
 	public static function register_exporter( $exporters ) {
 		$exporters[ self::EXPORTER_ERASER_ID ] = array(
-			'exporter_friendly_name' => __( 'Woo Stripe Reconcile', 'stripe-order-reconciler' ),
+			'exporter_friendly_name' => __( 'Payment Order Reconciler', 'payment-order-reconciler' ),
 			'callback'               => array( __CLASS__, 'export_data' ),
 		);
 		return $exporters;
@@ -33,7 +33,7 @@ class WSR_Audit_Log {
 
 	public static function register_eraser( $erasers ) {
 		$erasers[ self::EXPORTER_ERASER_ID ] = array(
-			'eraser_friendly_name' => __( 'Woo Stripe Reconcile', 'stripe-order-reconciler' ),
+			'eraser_friendly_name' => __( 'Payment Order Reconciler', 'payment-order-reconciler' ),
 			'callback'              => array( __CLASS__, 'erase_data' ),
 		);
 		return $erasers;
@@ -72,27 +72,27 @@ class WSR_Audit_Log {
 			foreach ( $rows as $row ) {
 				$export_items[] = array(
 					'group_id'    => 'woo-stripe-reconcile-drift',
-					'group_label' => __( 'Stripe Reconciliation Records', 'stripe-order-reconciler' ),
+					'group_label' => __( 'Payment Reconciliation Records', 'payment-order-reconciler' ),
 					'item_id'     => 'wsr-drift-' . $row->id,
 					'data'        => array(
 						array(
-							'name'  => __( 'Order', 'stripe-order-reconciler' ),
+							'name'  => __( 'Order', 'payment-order-reconciler' ),
 							'value' => '#' . $row->order_id,
 						),
 						array(
-							'name'  => __( 'Stripe object', 'stripe-order-reconciler' ),
+							'name'  => __( 'Stripe object', 'payment-order-reconciler' ),
 							'value' => $row->stripe_object_id,
 						),
 						array(
-							'name'  => __( 'Drift type', 'stripe-order-reconciler' ),
+							'name'  => __( 'Drift type', 'payment-order-reconciler' ),
 							'value' => $row->drift_type,
 						),
 						array(
-							'name'  => __( 'Status', 'stripe-order-reconciler' ),
+							'name'  => __( 'Status', 'payment-order-reconciler' ),
 							'value' => $row->status,
 						),
 						array(
-							'name'  => __( 'First detected', 'stripe-order-reconciler' ),
+							'name'  => __( 'First detected', 'payment-order-reconciler' ),
 							'value' => $row->first_detected_at,
 						),
 					),

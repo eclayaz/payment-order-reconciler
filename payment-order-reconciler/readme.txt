@@ -1,4 +1,4 @@
-=== Stripe Order Reconciler for WooCommerce ===
+=== Payment Order Reconciler for WooCommerce and Stripe ===
 Contributors: eclayaz
 Tags: woocommerce, stripe, reconciliation, orders, payments
 Requires at least: 6.8
@@ -43,9 +43,9 @@ No data is sent to any server other than Stripe's own API and your own WordPress
 1. Install and activate WooCommerce and the "WooCommerce Stripe Payment Gateway" plugin first — both are required, and this plugin refuses to stay active without them.
 2. Install and activate this plugin (search for it under Plugins > Add New, or upload the zip).
 3. In Stripe, go to Developers > API keys > Create restricted key. Set exactly these seven resources to Read, everything else to None: PaymentIntents, Charges, Checkout Sessions, Events, Webhook Endpoints, Disputes, Reviews.
-4. In WordPress, go to WooCommerce > Stripe Reconcile, paste the key, and save. The settings screen validates all seven scopes and shows which (if any) failed.
+4. In WordPress, go to WooCommerce > Payment Reconciler, paste the key, and save. The settings screen validates all seven scopes and shows which (if any) failed.
 5. The first scheduled scan runs an hour after activation — use "Run reconciliation now" on the same screen to check sooner.
-6. Results appear on WooCommerce > Stripe Reconciliation.
+6. Results appear on WooCommerce > Payment Reconciliation.
 
 == Frequently Asked Questions ==
 

@@ -1,4 +1,4 @@
-# Stripe Order Reconciler for WooCommerce
+# Payment Order Reconciler for WooCommerce and Stripe
 
 A self-hosted WordPress plugin that reconciles Stripe payment state against WooCommerce order state — for stores using the third-party **WooCommerce Stripe Payment Gateway** plugin (not WooPayments).
 
@@ -29,7 +29,7 @@ If a restricted key with write access to anything ever seems necessary, that's a
 - **Pass A** (daily, plus manual "Run now"): lists every Stripe PaymentIntent from the last 30 days in bulk, resolves each to a local order (via metadata, order key, or intent ID — never a per-order API call), and runs two state-comparison checks with exclusion lists derived from real gateway behavior (a fresh mid-3DS window, live dispute/Radar-review status, refund state, etc.).
 - **Pass B**: a diagnostic-only check for undelivered webhook events and whether your webhook endpoint is even reachable — surfaced on the dashboard, never itself a source of drift.
 - **Real-time listener**: WooCommerce/gateway hooks auto-resolve a drift row the moment an order legitimately completes, without waiting for the next scheduled pass.
-- **The dashboard** (WooCommerce → Stripe Reconciliation): Open / Fixed / Dismissed views, with one-click Fix/Dismiss per row, or select multiple rows and bulk Fix/Dismiss for a backlog. Every Fix — single or bulk — re-fetches the PaymentIntent from Stripe and re-runs the same detection check immediately before acting, so it can never act on stale data.
+- **The dashboard** (WooCommerce → Payment Reconciliation): Open / Fixed / Dismissed views, with one-click Fix/Dismiss per row, or select multiple rows and bulk Fix/Dismiss for a backlog. Every Fix — single or bulk — re-fetches the PaymentIntent from Stripe and re-runs the same detection check immediately before acting, so it can never act on stale data.
 
 ## Requirements
 
@@ -42,9 +42,9 @@ If a restricted key with write access to anything ever seems necessary, that's a
 
 This isn't published on WordPress.org (it's a private project) — install it manually:
 
-1. Copy (or clone) the `stripe-order-reconciler/` directory into your site's `wp-content/plugins/`.
+1. Copy (or clone) the `payment-order-reconciler/` directory into your site's `wp-content/plugins/`.
 2. Activate WooCommerce and the WooCommerce Stripe Payment Gateway first — the plugin refuses to activate (and deactivates itself if either is later turned off) without both.
-3. Activate **Stripe Order Reconciler for WooCommerce**.
+3. Activate **Payment Order Reconciler for WooCommerce and Stripe**.
 
 ## Setup
 
@@ -56,14 +56,14 @@ This isn't published on WordPress.org (it's a private project) — install it ma
    - Webhook Endpoints
    - Disputes
    - Reviews
-2. In WordPress: **WooCommerce → Stripe Reconcile**, paste the key, save. The settings screen validates all seven scopes and shows which (if any) failed.
+2. In WordPress: **WooCommerce → Payment Reconciler**, paste the key, save. The settings screen validates all seven scopes and shows which (if any) failed.
 3. Alternatively, define `WSR_STRIPE_RESTRICTED_KEY` in `wp-config.php` to lock the key via a file constant instead of storing it as an option — the settings screen will show it as locked and refuse to accept a pasted key over it.
 4. The key is encrypted at rest either way (AES-256-GCM, derived from the site's own auth salt) if stored as an option — see `WSR_Encryption`'s class comment for the exact threat model this does and doesn't cover.
 5. The first scheduled run happens an hour after activation (so you have time to configure the key first); use "Run reconciliation now" on the settings screen to check sooner.
 
 ## Using the dashboard
 
-**WooCommerce → Stripe Reconciliation:**
+**WooCommerce → Payment Reconciliation:**
 
 - **Open** — currently-detected drift, actionable.
 - **Fixed** — resolved, either by you clicking Fix, a bulk Fix, or the plugin noticing on its own that the order became healthy again.
@@ -112,7 +112,7 @@ npm run env:cli -- <command>   # run any wp-cli command against the dev site
 ### Running the test suite
 
 ```bash
-npx wp-env run tests-cli -- bash -c "cd wp-content/plugins/stripe-order-reconciler && vendor/bin/phpunit"
+npx wp-env run tests-cli -- bash -c "cd wp-content/plugins/payment-order-reconciler && vendor/bin/phpunit"
 ```
 
 145 tests across detection logic, the fixer's live-recheck flow, the scheduler's lock, encryption, and every documented bug fix from the independent review round. `tests/TestCase.php` has the shared fixtures (`make_order()`, `base_pi()`, etc.) if you're adding more.
@@ -121,4 +121,4 @@ A pre-PHPUnit, plain eval-file smoke test also still exists at `dev-tests/manual
 
 ## License
 
-GPLv2 or later — see [`stripe-order-reconciler/readme.txt`](stripe-order-reconciler/readme.txt) (the WordPress.org-format plugin readme, used for the in-plugin external-service disclosure and changelog).
+GPLv2 or later — see [`payment-order-reconciler/readme.txt`](payment-order-reconciler/readme.txt) (the WordPress.org-format plugin readme, used for the in-plugin external-service disclosure and changelog).

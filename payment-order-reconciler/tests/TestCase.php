@@ -1,6 +1,6 @@
 <?php
 /**
- * Shared helpers for the stripe-order-reconciler test suite: calling private
+ * Shared helpers for the payment-order-reconciler test suite: calling private
  * static methods via reflection (most of the interesting logic in this
  * plugin is deliberately private, since it's internal mechanism, not
  * public API), building test orders, and a base synthetic PaymentIntent

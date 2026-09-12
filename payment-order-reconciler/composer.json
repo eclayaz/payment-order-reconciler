@@ -1,6 +1,6 @@
 {
-  "name": "eclayaz/stripe-order-reconciler",
-  "description": "Dev dependencies for the stripe-order-reconciler PHPUnit suite. Not required to run the plugin itself.",
+  "name": "eclayaz/payment-order-reconciler",
+  "description": "Dev dependencies for the payment-order-reconciler PHPUnit suite. Not required to run the plugin itself.",
   "type": "wordpress-plugin",
   "require-dev": {
     "phpunit/phpunit": "^9.6",

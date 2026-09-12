@@ -18,7 +18,7 @@ defined( 'ABSPATH' ) || exit;
 class WSR_Scheduler {
 
 	const HOOK        = 'wsr_daily_reconciliation';
-	const GROUP       = 'stripe-order-reconciler';
+	const GROUP       = 'payment-order-reconciler';
 	const LOCK_OPTION = 'wsr_run_lock';
 
 	/**
@@ -75,7 +75,7 @@ class WSR_Scheduler {
 		if ( ! self::try_acquire_lock() ) {
 			return new WP_Error(
 				'wsr_run_in_progress',
-				__( 'A reconciliation run is already in progress — try again in a few minutes.', 'stripe-order-reconciler' )
+				__( 'A reconciliation run is already in progress — try again in a few minutes.', 'payment-order-reconciler' )
 			);
 		}
 

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Builds a clean, WP.org-submission-ready ZIP of the plugin — excludes
 # everything dev-only (tests/, dev-tests/, composer.*, vendor/,
-# phpunit.xml.dist) per stripe-order-reconciler/.distignore, so what you
+# phpunit.xml.dist) per payment-order-reconciler/.distignore, so what you
 # see in build/ is exactly what would ship to end users, not just an
 # intention documented in a file nobody runs.
 set -euo pipefail
 
-PLUGIN_SLUG="stripe-order-reconciler"
+PLUGIN_SLUG="payment-order-reconciler"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PLUGIN_DIR="$REPO_ROOT/$PLUGIN_SLUG"
 BUILD_DIR="$REPO_ROOT/build"

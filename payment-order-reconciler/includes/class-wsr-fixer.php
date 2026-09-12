@@ -64,7 +64,7 @@ class WSR_Fixer {
 
 	public static function handle_fix() {
 		if ( ! current_user_can( self::CAPABILITY ) ) {
-			wp_die( esc_html__( 'You do not have permission to do this.', 'stripe-order-reconciler' ) );
+			wp_die( esc_html__( 'You do not have permission to do this.', 'payment-order-reconciler' ) );
 		}
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read only to build the nonce action name below; check_admin_referer() immediately after is the actual verification, before any effectful action.
 		$drift_id = isset( $_REQUEST['drift_id'] ) ? absint( $_REQUEST['drift_id'] ) : 0;
@@ -83,7 +83,7 @@ class WSR_Fixer {
 
 	public static function handle_dismiss() {
 		if ( ! current_user_can( self::CAPABILITY ) ) {
-			wp_die( esc_html__( 'You do not have permission to do this.', 'stripe-order-reconciler' ) );
+			wp_die( esc_html__( 'You do not have permission to do this.', 'payment-order-reconciler' ) );
 		}
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read only to build the nonce action name below; check_admin_referer() immediately after is the actual verification, before any effectful action.
 		$drift_id = isset( $_REQUEST['drift_id'] ) ? absint( $_REQUEST['drift_id'] ) : 0;
@@ -147,25 +147,25 @@ class WSR_Fixer {
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared -- $table is our own constant prefix.
 		$row = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$table} WHERE id = %d", $drift_id ) );
 		if ( ! $row ) {
-			return new WP_Error( 'wsr_not_found', __( 'Drift record not found.', 'stripe-order-reconciler' ) );
+			return new WP_Error( 'wsr_not_found', __( 'Drift record not found.', 'payment-order-reconciler' ) );
 		}
 		if ( 'open' !== $row->status ) {
-			return new WP_Error( 'wsr_not_open', __( 'This drift is no longer open (already fixed or dismissed).', 'stripe-order-reconciler' ) );
+			return new WP_Error( 'wsr_not_open', __( 'This drift is no longer open (already fixed or dismissed).', 'payment-order-reconciler' ) );
 		}
 
 		// No Fix action exists for orphaned_charge/needs_review — no order
 		// to act on. See FEATURES.md / PROBLEM.md non-goals.
 		if ( ! in_array( $row->drift_type, array( 'stuck_pending', 'wrongly_cancelled_paid' ), true ) ) {
-			return new WP_Error( 'wsr_no_fix_for_type', __( 'No automated fix exists for this drift type — it can only be dismissed.', 'stripe-order-reconciler' ) );
+			return new WP_Error( 'wsr_no_fix_for_type', __( 'No automated fix exists for this drift type — it can only be dismissed.', 'payment-order-reconciler' ) );
 		}
 
 		if ( ! $row->order_id ) {
-			return new WP_Error( 'wsr_no_order', __( 'This drift record has no associated order.', 'stripe-order-reconciler' ) );
+			return new WP_Error( 'wsr_no_order', __( 'This drift record has no associated order.', 'payment-order-reconciler' ) );
 		}
 
 		$order = wc_get_order( $row->order_id );
 		if ( ! $order instanceof WC_Order ) {
-			return new WP_Error( 'wsr_order_missing', __( 'The associated order no longer exists.', 'stripe-order-reconciler' ) );
+			return new WP_Error( 'wsr_order_missing', __( 'The associated order no longer exists.', 'payment-order-reconciler' ) );
 		}
 
 		// Bug fix (independent review, round 2): this used to be
@@ -176,10 +176,10 @@ class WSR_Fixer {
 		// on safety-critical logic. Missing the helper class now refuses
 		// the fix outright instead.
 		if ( ! class_exists( 'WC_Stripe_Order_Helper' ) ) {
-			return new WP_Error( 'wsr_lock_check_unavailable', __( 'Cannot verify the gateway\'s own lock state before fixing — the WooCommerce Stripe Payment Gateway plugin may be missing or an incompatible version.', 'stripe-order-reconciler' ) );
+			return new WP_Error( 'wsr_lock_check_unavailable', __( 'Cannot verify the gateway\'s own lock state before fixing — the WooCommerce Stripe Payment Gateway plugin may be missing or an incompatible version.', 'payment-order-reconciler' ) );
 		}
 		if ( self::is_locked( $order ) ) {
-			return new WP_Error( 'wsr_locked', __( 'This order is currently locked by the Stripe gateway\'s own webhook processing — try again in a few minutes.', 'stripe-order-reconciler' ) );
+			return new WP_Error( 'wsr_locked', __( 'This order is currently locked by the Stripe gateway\'s own webhook processing — try again in a few minutes.', 'payment-order-reconciler' ) );
 		}
 
 		// Bug fix (independent review, round 2): the only prior guard here
@@ -196,7 +196,7 @@ class WSR_Fixer {
 		if ( null === $client ) {
 			$api_key = WSR_Settings::get_api_key();
 			if ( '' === $api_key ) {
-				return new WP_Error( 'wsr_no_api_key', __( 'No Stripe API key is configured — cannot verify current state before fixing.', 'stripe-order-reconciler' ) );
+				return new WP_Error( 'wsr_no_api_key', __( 'No Stripe API key is configured — cannot verify current state before fixing.', 'payment-order-reconciler' ) );
 			}
 			$client = new WSR_Stripe_Client( $api_key );
 		}
@@ -211,7 +211,7 @@ class WSR_Fixer {
 				'wsr_fix_verify_failed',
 				sprintf(
 					/* translators: %s: the underlying Stripe API error message */
-					__( 'Could not verify current Stripe state before fixing — refusing to act on a stale snapshot: %s', 'stripe-order-reconciler' ),
+					__( 'Could not verify current Stripe state before fixing — refusing to act on a stale snapshot: %s', 'payment-order-reconciler' ),
 					$pi->get_error_message()
 				)
 			);
@@ -236,7 +236,7 @@ class WSR_Fixer {
 				array( '%s', '%s', '%s' ),
 				array( '%d' )
 			);
-			return new WP_Error( 'wsr_already_resolved', __( 'This order no longer shows as drifting against Stripe\'s current state — marked resolved automatically, no fix was needed.', 'stripe-order-reconciler' ) );
+			return new WP_Error( 'wsr_already_resolved', __( 'This order no longer shows as drifting against Stripe\'s current state — marked resolved automatically, no fix was needed.', 'payment-order-reconciler' ) );
 		}
 
 		if ( 'info' === $live_drift['severity'] ) {
@@ -247,7 +247,7 @@ class WSR_Fixer {
 			// scheduled run.
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- no wpdb abstraction exists for this table.
 			$wpdb->update( $table, array( 'severity' => 'info' ), array( 'id' => $drift_id ), array( '%s' ), array( '%d' ) );
-			return new WP_Error( 'wsr_disputed_no_fix', __( 'This order currently has an active dispute or Radar review — no automated fix is available while that\'s open.', 'stripe-order-reconciler' ) );
+			return new WP_Error( 'wsr_disputed_no_fix', __( 'This order currently has an active dispute or Radar review — no automated fix is available while that\'s open.', 'payment-order-reconciler' ) );
 		}
 
 		// Bug fix (independent review, round 2): the prior version used
@@ -271,7 +271,7 @@ class WSR_Fixer {
 		// verify date_paid actually got set before recording success.
 		$order = wc_get_order( $row->order_id );
 		if ( ! $order instanceof WC_Order || ! $order->get_date_paid() ) {
-			return new WP_Error( 'wsr_fix_did_not_take', __( 'The fix did not result in the order being marked paid — no changes were recorded as applied.', 'stripe-order-reconciler' ) );
+			return new WP_Error( 'wsr_fix_did_not_take', __( 'The fix did not result in the order being marked paid — no changes were recorded as applied.', 'payment-order-reconciler' ) );
 		}
 
 		self::complete_stripe_meta( $order );

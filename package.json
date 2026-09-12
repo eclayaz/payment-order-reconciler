@@ -1,7 +1,7 @@
 {
-  "name": "stripe-order-reconciler-dev",
+  "name": "payment-order-reconciler-dev",
   "private": true,
-  "description": "Local Docker dev/test environment for the stripe-order-reconciler plugin. Not the plugin itself — that's in ./stripe-order-reconciler.",
+  "description": "Local Docker dev/test environment for the payment-order-reconciler plugin. Not the plugin itself — that's in ./payment-order-reconciler.",
   "scripts": {
     "env:start": "wp-env start",
     "env:stop": "wp-env stop",
