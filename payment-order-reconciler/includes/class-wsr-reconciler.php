@@ -88,7 +88,7 @@ class WSR_Reconciler {
 		if ( $pass_a_succeeded ) {
 			update_option( 'wsr_last_run_at', current_time( 'mysql', true ), false );
 		} else {
-			$error = __( 'Unknown error.', 'payment-order-reconciler-for-stripe' );
+			$error = __( 'Unknown error.', 'driftwatch-order-reconciler-for-stripe' );
 			if ( is_wp_error( $pass_a ) ) {
 				$error = $pass_a->get_error_message();
 			} elseif ( ! empty( $pass_a['errors'] ) ) {
@@ -96,7 +96,7 @@ class WSR_Reconciler {
 			} elseif ( ! empty( $pass_a['window_truncated'] ) ) {
 				$error = sprintf(
 					/* translators: %d: the pagination cap that was hit, e.g. 50 */
-					__( 'The %d-page pagination cap was reached with more PaymentIntents still available — this run only covered part of the 30-day window.', 'payment-order-reconciler-for-stripe' ),
+					__( 'The %d-page pagination cap was reached with more PaymentIntents still available — this run only covered part of the 30-day window.', 'driftwatch-order-reconciler-for-stripe' ),
 					self::MAX_PAGES
 				);
 			}
@@ -136,7 +136,7 @@ class WSR_Reconciler {
 		if ( null === $client ) {
 			$api_key = WSR_Settings::get_api_key();
 			if ( '' === $api_key ) {
-				return new WP_Error( 'wsr_no_api_key', __( 'No Stripe API key is configured — save one on the settings screen first.', 'payment-order-reconciler-for-stripe' ) );
+				return new WP_Error( 'wsr_no_api_key', __( 'No Stripe API key is configured — save one on the settings screen first.', 'driftwatch-order-reconciler-for-stripe' ) );
 			}
 			$client = new WSR_Stripe_Client( $api_key );
 		}
@@ -1059,7 +1059,7 @@ class WSR_Reconciler {
 	public static function run_pass_b() {
 		$api_key = WSR_Settings::get_api_key();
 		if ( '' === $api_key ) {
-			return new WP_Error( 'wsr_no_api_key', __( 'No Stripe API key is configured.', 'payment-order-reconciler-for-stripe' ) );
+			return new WP_Error( 'wsr_no_api_key', __( 'No Stripe API key is configured.', 'driftwatch-order-reconciler-for-stripe' ) );
 		}
 
 		$client       = new WSR_Stripe_Client( $api_key );
@@ -1100,7 +1100,7 @@ class WSR_Reconciler {
 	public static function run_webhook_health_check() {
 		$api_key = WSR_Settings::get_api_key();
 		if ( '' === $api_key ) {
-			return new WP_Error( 'wsr_no_api_key', __( 'No Stripe API key is configured.', 'payment-order-reconciler-for-stripe' ) );
+			return new WP_Error( 'wsr_no_api_key', __( 'No Stripe API key is configured.', 'driftwatch-order-reconciler-for-stripe' ) );
 		}
 
 		$client = new WSR_Stripe_Client( $api_key );

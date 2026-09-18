@@ -1,6 +1,6 @@
 <?php
 /**
- * Plugin Name:       Payment Order Reconciler for Stripe
+ * Plugin Name:       Driftwatch Order Reconciler for Stripe
  * Plugin URI:        https://github.com/eclayaz/payment-order-reconciler
  * Description:       Reconciles Stripe payment state against WooCommerce order state for stores on the standard Stripe gateway plugin. Self-hosted, read-only Stripe API key only — no data ever leaves your site.
  * Version:           1.1.0
@@ -10,7 +10,7 @@
  * Author:            eclayaz
  * License:           GPL-2.0-or-later
  * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
- * Text Domain:       payment-order-reconciler-for-stripe
+ * Text Domain:       driftwatch-order-reconciler-for-stripe
  *
  * WC requires at least: 8.2
  * WC tested up to:      11.0
@@ -77,8 +77,8 @@ function wsr_missing_dependencies_notice() {
 		<p>
 			<?php
 			esc_html_e(
-				'Payment Order Reconciler for Stripe requires both WooCommerce and the "WooCommerce Stripe Payment Gateway" plugin to be active. It has been deactivated.',
-				'payment-order-reconciler-for-stripe'
+				'Driftwatch Order Reconciler for Stripe requires both WooCommerce and the "WooCommerce Stripe Payment Gateway" plugin to be active. It has been deactivated.',
+				'driftwatch-order-reconciler-for-stripe'
 			);
 			?>
 		</p>
@@ -155,8 +155,8 @@ add_action(
 			<p>
 				<?php
 				esc_html_e(
-					'Payment Order Reconciler for Stripe could not be activated: both WooCommerce and the "WooCommerce Stripe Payment Gateway" plugin must be active first.',
-					'payment-order-reconciler-for-stripe'
+					'Driftwatch Order Reconciler for Stripe could not be activated: both WooCommerce and the "WooCommerce Stripe Payment Gateway" plugin must be active first.',
+					'driftwatch-order-reconciler-for-stripe'
 				);
 				?>
 			</p>

@@ -25,7 +25,7 @@ class WSR_Audit_Log {
 
 	public static function register_exporter( $exporters ) {
 		$exporters[ self::EXPORTER_ERASER_ID ] = array(
-			'exporter_friendly_name' => __( 'Payment Order Reconciler', 'payment-order-reconciler-for-stripe' ),
+			'exporter_friendly_name' => __( 'Driftwatch Order Reconciler', 'driftwatch-order-reconciler-for-stripe' ),
 			'callback'               => array( __CLASS__, 'export_data' ),
 		);
 		return $exporters;
@@ -33,7 +33,7 @@ class WSR_Audit_Log {
 
 	public static function register_eraser( $erasers ) {
 		$erasers[ self::EXPORTER_ERASER_ID ] = array(
-			'eraser_friendly_name' => __( 'Payment Order Reconciler', 'payment-order-reconciler-for-stripe' ),
+			'eraser_friendly_name' => __( 'Driftwatch Order Reconciler', 'driftwatch-order-reconciler-for-stripe' ),
 			'callback'              => array( __CLASS__, 'erase_data' ),
 		);
 		return $erasers;
@@ -72,27 +72,27 @@ class WSR_Audit_Log {
 			foreach ( $rows as $row ) {
 				$export_items[] = array(
 					'group_id'    => 'woo-stripe-reconcile-drift',
-					'group_label' => __( 'Payment Reconciliation Records', 'payment-order-reconciler-for-stripe' ),
+					'group_label' => __( 'Payment Reconciliation Records', 'driftwatch-order-reconciler-for-stripe' ),
 					'item_id'     => 'wsr-drift-' . $row->id,
 					'data'        => array(
 						array(
-							'name'  => __( 'Order', 'payment-order-reconciler-for-stripe' ),
+							'name'  => __( 'Order', 'driftwatch-order-reconciler-for-stripe' ),
 							'value' => '#' . $row->order_id,
 						),
 						array(
-							'name'  => __( 'Stripe object', 'payment-order-reconciler-for-stripe' ),
+							'name'  => __( 'Stripe object', 'driftwatch-order-reconciler-for-stripe' ),
 							'value' => $row->stripe_object_id,
 						),
 						array(
-							'name'  => __( 'Drift type', 'payment-order-reconciler-for-stripe' ),
+							'name'  => __( 'Drift type', 'driftwatch-order-reconciler-for-stripe' ),
 							'value' => $row->drift_type,
 						),
 						array(
-							'name'  => __( 'Status', 'payment-order-reconciler-for-stripe' ),
+							'name'  => __( 'Status', 'driftwatch-order-reconciler-for-stripe' ),
 							'value' => $row->status,
 						),
 						array(
-							'name'  => __( 'First detected', 'payment-order-reconciler-for-stripe' ),
+							'name'  => __( 'First detected', 'driftwatch-order-reconciler-for-stripe' ),
 							'value' => $row->first_detected_at,
 						),
 					),

@@ -40,13 +40,13 @@ class WSR_Drift_List_Table extends WP_List_Table {
 		}
 
 		return $columns + array(
-			'order'    => __( 'Order', 'payment-order-reconciler-for-stripe' ),
-			'object'   => __( 'Stripe object', 'payment-order-reconciler-for-stripe' ),
-			'type'     => __( 'Type', 'payment-order-reconciler-for-stripe' ),
-			'severity' => __( 'Severity', 'payment-order-reconciler-for-stripe' ),
-			'states'   => __( 'Local → Stripe', 'payment-order-reconciler-for-stripe' ),
-			'seen'     => __( 'Detected', 'payment-order-reconciler-for-stripe' ),
-			'actions'  => __( 'Actions', 'payment-order-reconciler-for-stripe' ),
+			'order'    => __( 'Order', 'driftwatch-order-reconciler-for-stripe' ),
+			'object'   => __( 'Stripe object', 'driftwatch-order-reconciler-for-stripe' ),
+			'type'     => __( 'Type', 'driftwatch-order-reconciler-for-stripe' ),
+			'severity' => __( 'Severity', 'driftwatch-order-reconciler-for-stripe' ),
+			'states'   => __( 'Local → Stripe', 'driftwatch-order-reconciler-for-stripe' ),
+			'seen'     => __( 'Detected', 'driftwatch-order-reconciler-for-stripe' ),
+			'actions'  => __( 'Actions', 'driftwatch-order-reconciler-for-stripe' ),
 		);
 	}
 
@@ -67,8 +67,8 @@ class WSR_Drift_List_Table extends WP_List_Table {
 			return array();
 		}
 		return array(
-			'wsr_bulk_fix'     => __( 'Fix', 'payment-order-reconciler-for-stripe' ),
-			'wsr_bulk_dismiss' => __( 'Dismiss', 'payment-order-reconciler-for-stripe' ),
+			'wsr_bulk_fix'     => __( 'Fix', 'driftwatch-order-reconciler-for-stripe' ),
+			'wsr_bulk_dismiss' => __( 'Dismiss', 'driftwatch-order-reconciler-for-stripe' ),
 		);
 	}
 
@@ -86,9 +86,9 @@ class WSR_Drift_List_Table extends WP_List_Table {
 		$counts = $wpdb->get_results( $wpdb->prepare( 'SELECT status, COUNT(*) as c FROM %i GROUP BY status', $table ), OBJECT_K );
 
 		$labels = array(
-			'open'      => __( 'Open', 'payment-order-reconciler-for-stripe' ),
-			'fixed'     => __( 'Fixed', 'payment-order-reconciler-for-stripe' ),
-			'dismissed' => __( 'Dismissed', 'payment-order-reconciler-for-stripe' ),
+			'open'      => __( 'Open', 'driftwatch-order-reconciler-for-stripe' ),
+			'fixed'     => __( 'Fixed', 'driftwatch-order-reconciler-for-stripe' ),
+			'dismissed' => __( 'Dismissed', 'driftwatch-order-reconciler-for-stripe' ),
 		);
 
 		$views = array();
@@ -156,7 +156,7 @@ class WSR_Drift_List_Table extends WP_List_Table {
 			case 'seen':
 				return sprintf(
 					/* translators: 1: human-readable time since detection, 2: number of times detected */
-					esc_html__( '%1$s ago (×%2$d)', 'payment-order-reconciler-for-stripe' ),
+					esc_html__( '%1$s ago (×%2$d)', 'driftwatch-order-reconciler-for-stripe' ),
 					esc_html( human_time_diff( strtotime( $item->detected_at . ' UTC' ), time() ) ),
 					(int) $item->detection_count
 				);
@@ -235,11 +235,11 @@ class WSR_Drift_List_Table extends WP_List_Table {
 			$actions[] = sprintf(
 				'<a class="button button-small button-primary" href="%s" onclick="return confirm(%s);">%s</a>',
 				esc_url( $fix_url ),
-				esc_attr( wp_json_encode( __( 'Mark this order as paid and completed based on Stripe\'s current record? This emails the customer and cannot be undone from here.', 'payment-order-reconciler-for-stripe' ) ) ),
-				esc_html__( 'Fix', 'payment-order-reconciler-for-stripe' )
+				esc_attr( wp_json_encode( __( 'Mark this order as paid and completed based on Stripe\'s current record? This emails the customer and cannot be undone from here.', 'driftwatch-order-reconciler-for-stripe' ) ) ),
+				esc_html__( 'Fix', 'driftwatch-order-reconciler-for-stripe' )
 			);
 		} elseif ( 'info' === $item->severity ) {
-			$actions[] = '<span class="description">' . esc_html__( 'No fix while disputed/under review', 'payment-order-reconciler-for-stripe' ) . '</span>';
+			$actions[] = '<span class="description">' . esc_html__( 'No fix while disputed/under review', 'driftwatch-order-reconciler-for-stripe' ) . '</span>';
 		}
 
 		$dismiss_url = wp_nonce_url(
@@ -252,12 +252,12 @@ class WSR_Drift_List_Table extends WP_List_Table {
 			),
 			WSR_Fixer::dismiss_nonce_action( $item->id )
 		);
-		$actions[] = sprintf( '<a class="button button-small" href="%s">%s</a>', esc_url( $dismiss_url ), esc_html__( 'Dismiss', 'payment-order-reconciler-for-stripe' ) );
+		$actions[] = sprintf( '<a class="button button-small" href="%s">%s</a>', esc_url( $dismiss_url ), esc_html__( 'Dismiss', 'driftwatch-order-reconciler-for-stripe' ) );
 
 		return implode( ' ', $actions ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- each entry already escaped when built above.
 	}
 
 	public function no_items() {
-		esc_html_e( 'No drift in this category.', 'payment-order-reconciler-for-stripe' );
+		esc_html_e( 'No drift in this category.', 'driftwatch-order-reconciler-for-stripe' );
 	}
 }

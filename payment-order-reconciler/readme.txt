@@ -1,4 +1,4 @@
-=== Payment Order Reconciler for Stripe ===
+=== Driftwatch Order Reconciler for Stripe ===
 Contributors: eclayaz
 Tags: woocommerce, stripe, reconciliation, orders, payments
 Requires at least: 6.8

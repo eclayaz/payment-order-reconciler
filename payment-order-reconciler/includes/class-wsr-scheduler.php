@@ -75,7 +75,7 @@ class WSR_Scheduler {
 		if ( ! self::try_acquire_lock() ) {
 			return new WP_Error(
 				'wsr_run_in_progress',
-				__( 'A reconciliation run is already in progress — try again in a few minutes.', 'payment-order-reconciler-for-stripe' )
+				__( 'A reconciliation run is already in progress — try again in a few minutes.', 'driftwatch-order-reconciler-for-stripe' )
 			);
 		}
 
