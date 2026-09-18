@@ -13,19 +13,43 @@ class WSR_Admin_Dashboard {
 
 	const CAPABILITY = 'manage_woocommerce';
 
+	/** Hook suffix add_submenu_page() returns — used to scope enqueue_assets() to only this page. */
+	private static $hook_suffix;
+
 	public static function init() {
 		add_action( 'admin_menu', array( __CLASS__, 'register_menu' ) );
+		add_action( 'admin_enqueue_scripts', array( __CLASS__, 'enqueue_assets' ) );
 	}
 
 	public static function register_menu() {
-		add_submenu_page(
+		self::$hook_suffix = add_submenu_page(
 			'woocommerce',
-			__( 'Payment Reconciliation', 'payment-order-reconciler-for-stripe' ),
-			__( 'Payment Reconciliation', 'payment-order-reconciler-for-stripe' ),
+			__( 'Payment Reconciliation', 'driftwatch-order-reconciler-for-stripe' ),
+			__( 'Payment Reconciliation', 'driftwatch-order-reconciler-for-stripe' ),
 			self::CAPABILITY,
 			'wsr-dashboard',
 			array( __CLASS__, 'render_page' )
 		);
+	}
+
+	/**
+	 * Registers the bulk-Fix confirm script as a proper enqueued asset
+	 * instead of a raw inline <script> tag (flagged by the WP.org Plugin
+	 * Check tool — plugins should use wp_enqueue_script()/
+	 * wp_add_inline_script() rather than printing <script> directly, per
+	 * https://developer.wordpress.org/plugins/plugin-basics/best-practices/).
+	 * `false` as the src registers a handle with no external file, purely
+	 * to carry the inline script below — a well-established core pattern
+	 * for a script with no standalone file of its own.
+	 */
+	public static function enqueue_assets( $hook_suffix ) {
+		if ( self::$hook_suffix !== $hook_suffix ) {
+			return;
+		}
+
+		wp_register_script( 'wsr-bulk-fix-confirm', false, array(), WSR_VERSION, true );
+		wp_enqueue_script( 'wsr-bulk-fix-confirm' );
+		wp_add_inline_script( 'wsr-bulk-fix-confirm', self::bulk_fix_confirm_script() );
 	}
 
 	public static function render_page() {
@@ -48,7 +72,7 @@ class WSR_Admin_Dashboard {
 
 		?>
 		<div class="wrap">
-			<h1><?php esc_html_e( 'Payment Reconciliation', 'payment-order-reconciler-for-stripe' ); ?></h1>
+			<h1><?php esc_html_e( 'Payment Reconciliation', 'driftwatch-order-reconciler-for-stripe' ); ?></h1>
 			<?php self::render_notice( $notice ); ?>
 			<?php
 			// Bug fix (independent review, round 2): TECHNICAL_SPEC.md
@@ -63,7 +87,6 @@ class WSR_Admin_Dashboard {
 				<?php $table->views(); ?>
 				<?php $table->display(); ?>
 			</form>
-			<?php self::render_bulk_fix_confirm_script(); ?>
 		</div>
 		<?php
 	}
@@ -103,7 +126,7 @@ class WSR_Admin_Dashboard {
 		check_admin_referer( 'bulk-drifts' );
 
 		if ( ! current_user_can( self::CAPABILITY ) ) {
-			wp_die( esc_html__( 'You do not have permission to do this.', 'payment-order-reconciler-for-stripe' ) );
+			wp_die( esc_html__( 'You do not have permission to do this.', 'driftwatch-order-reconciler-for-stripe' ) );
 		}
 
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- verified by check_admin_referer() just above.
@@ -143,14 +166,17 @@ class WSR_Admin_Dashboard {
 	 * submit time, confirm. Harmless if it also fires for a Dismiss
 	 * submission with an unrelated dropdown left on Fix; it never
 	 * suppresses a needed confirmation, only occasionally shows one extra.
+	 *
+	 * @return string Raw JS, passed to wp_add_inline_script() by enqueue_assets() —
+	 *                 never echoed directly, so the $message placeholder below
+	 *                 doesn't need escaping beyond wp_json_encode()'s own.
 	 */
-	private static function render_bulk_fix_confirm_script() {
+	private static function bulk_fix_confirm_script() {
 		$message = wp_json_encode(
-			__( 'Mark the selected orders as paid and completed based on Stripe\'s current record? This emails each customer and cannot be undone from here.', 'payment-order-reconciler-for-stripe' )
+			__( 'Mark the selected orders as paid and completed based on Stripe\'s current record? This emails each customer and cannot be undone from here.', 'driftwatch-order-reconciler-for-stripe' )
 		);
-		?>
-		<script>
-		( function() {
+
+		return "( function() {
 			var form = document.getElementById( 'wsr-drift-table-form' );
 			if ( ! form ) {
 				return;
@@ -162,22 +188,20 @@ class WSR_Admin_Dashboard {
 				if ( ! isFix ) {
 					return;
 				}
-				if ( 0 === form.querySelectorAll( 'input[name="drift_id[]"]:checked' ).length ) {
+				if ( 0 === form.querySelectorAll( 'input[name=\"drift_id[]\"]:checked' ).length ) {
 					return;
 				}
-				if ( ! window.confirm( <?php echo $message; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- wp_json_encode()'d string literal, safe in this context. ?> ) ) {
+				if ( ! window.confirm( {$message} ) ) {
 					e.preventDefault();
 				}
 			} );
-		} )();
-		</script>
-		<?php
+		} )();";
 	}
 
 	private static function render_notice( $notice ) {
 		$messages = array(
-			'fix_applied' => array( 'success', __( 'Fix applied — the order status was synced to Stripe\'s record.', 'payment-order-reconciler-for-stripe' ) ),
-			'dismissed'   => array( 'success', __( 'Drift dismissed. It will not reappear unless it recurs after being fixed.', 'payment-order-reconciler-for-stripe' ) ),
+			'fix_applied' => array( 'success', __( 'Fix applied — the order status was synced to Stripe\'s record.', 'driftwatch-order-reconciler-for-stripe' ) ),
+			'dismissed'   => array( 'success', __( 'Drift dismissed. It will not reappear unless it recurs after being fixed.', 'driftwatch-order-reconciler-for-stripe' ) ),
 			'fix_error'   => array( 'error', self::get_fix_error_message() ),
 		);
 
@@ -202,18 +226,18 @@ class WSR_Admin_Dashboard {
 		$ok = isset( $_GET['wsr_ok'] ) ? absint( $_GET['wsr_ok'] ) : 0;
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- see above.
 		$failed = isset( $_GET['wsr_failed'] ) ? absint( $_GET['wsr_failed'] ) : 0;
-		$verb   = 'bulk_fixed' === $notice ? __( 'fixed', 'payment-order-reconciler-for-stripe' ) : __( 'dismissed', 'payment-order-reconciler-for-stripe' );
+		$verb   = 'bulk_fixed' === $notice ? __( 'fixed', 'driftwatch-order-reconciler-for-stripe' ) : __( 'dismissed', 'driftwatch-order-reconciler-for-stripe' );
 
 		$text = sprintf(
 			/* translators: 1: number succeeded, 2: "fixed" or "dismissed" */
-			_n( '%1$d row %2$s.', '%1$d rows %2$s.', $ok, 'payment-order-reconciler-for-stripe' ),
+			_n( '%1$d row %2$s.', '%1$d rows %2$s.', $ok, 'driftwatch-order-reconciler-for-stripe' ),
 			$ok,
 			$verb
 		);
 		if ( $failed > 0 ) {
 			$text .= ' ' . sprintf(
 				/* translators: %d: number that could not be processed */
-				_n( '%d could not be processed — try it individually to see why (still-disputed, locked, or already resolved are the usual reasons).', '%d could not be processed — try each individually to see why (still-disputed, locked, or already resolved are the usual reasons).', $failed, 'payment-order-reconciler-for-stripe' ),
+				_n( '%d could not be processed — try it individually to see why (still-disputed, locked, or already resolved are the usual reasons).', '%d could not be processed — try each individually to see why (still-disputed, locked, or already resolved are the usual reasons).', $failed, 'driftwatch-order-reconciler-for-stripe' ),
 				$failed
 			);
 		}
@@ -223,6 +247,6 @@ class WSR_Admin_Dashboard {
 
 	private static function get_fix_error_message() {
 		$message = get_transient( 'wsr_fix_error_' . get_current_user_id() );
-		return $message ? $message : __( 'The fix could not be applied.', 'payment-order-reconciler-for-stripe' );
+		return $message ? $message : __( 'The fix could not be applied.', 'driftwatch-order-reconciler-for-stripe' );
 	}
 }
